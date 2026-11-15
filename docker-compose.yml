@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgres:16
+    environment: { POSTGRES_USER: stockpesa, POSTGRES_PASSWORD: stockpesa, POSTGRES_DB: stockpesa }
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stockpesa -d stockpesa"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  api:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: "postgresql://stockpesa:stockpesa@db:5432/stockpesa"
+      NODE_ENV: development
+      SEED_DEMO: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["3000:3000"]
+    command: sh -c "npx prisma db push && if [ \"$${SEED_DEMO}\" = true ]; then npx prisma db seed; fi && node dist/src/main.js"
+volumes: { pgdata: {} }
