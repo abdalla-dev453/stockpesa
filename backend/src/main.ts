@@ -3,6 +3,7 @@ import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { ValidationPipe, Logger } from "@nestjs/common";
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
+import * as express from "express";
 import { AppModule } from "./app.module";
 async function bootstrap() {
   const production = process.env.NODE_ENV === "production";
@@ -38,11 +39,11 @@ async function bootstrap() {
   if (!Number.isInteger(proxyHops) || proxyHops < 0 || proxyHops > 10) throw new Error("TRUST_PROXY_HOPS must be an integer from 0 to 10");
 
   const app = await NestFactory.create(AppModule, { bodyParser: false });
-  const express = app.getHttpAdapter().getInstance();
-  express.disable("x-powered-by");
-  express.use(express.json({ limit: "256kb" }));
-  express.use(express.urlencoded({ limit: "256kb", extended: true }));
-  if (Number.isInteger(proxyHops) && proxyHops > 0) express.set("trust proxy", proxyHops);
+  const server = app.getHttpAdapter().getInstance();
+  server.disable("x-powered-by");
+  server.use(express.json({ limit: "256kb" }));
+  server.use(express.urlencoded({ limit: "256kb", extended: true }));
+  if (Number.isInteger(proxyHops) && proxyHops > 0) server.set("trust proxy", proxyHops);
   const allowedOrigins = corsOrigins.length
     ? corsOrigins
     : ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"];
