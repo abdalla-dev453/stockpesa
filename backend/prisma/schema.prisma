@@ -1,0 +1,338 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  MANAGER
+  CASHIER
+  STOREKEEPER
+}
+
+enum MovementType {
+  purchase_in
+  sale_out
+  adjustment
+  return_in
+  return_out
+}
+
+enum PayMethod {
+  CASH
+  MPESA
+  BANK
+  CARD
+  CREDIT
+}
+
+model Business {
+  id            String         @id @default(uuid()) @db.Uuid
+  name          String
+  type          String
+  phone         String?
+  location      String?
+  currency      String         @default("KES")
+  vatEnabled    Boolean        @default(false)
+  receiptFooter String?
+  logoUrl       String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  users         User[]
+  products      Product[]
+  categories    Category[]
+  customers     Customer[]
+  sales         Sale[]
+  alerts        Alert[]
+  audits        AuditLog[]
+  returns       ReturnRecord[]
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  businessId   String    @db.Uuid
+  fullName     String
+  phone        String    @unique
+  email        String    @unique
+  passwordHash String
+  refreshHash  String?
+  role         Role
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  business     Business  @relation(fields: [businessId], references: [id])
+
+  @@index([businessId])
+}
+
+model Category {
+  id         String    @id @default(uuid()) @db.Uuid
+  businessId String    @db.Uuid
+  name       String
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  business   Business  @relation(fields: [businessId], references: [id])
+  products   Product[]
+
+  @@unique([businessId, name])
+}
+
+model Product {
+  id              String           @id @default(uuid()) @db.Uuid
+  businessId      String           @db.Uuid
+  categoryId      String?          @db.Uuid
+  name            String
+  sku             String?
+  barcode         String?
+  brand           String?
+  description     String?
+  unit            String           @default("piece")
+  buyingPrice     Decimal          @db.Decimal(14, 2)
+  sellingPrice    Decimal          @db.Decimal(14, 2)
+  wholesalePrice  Decimal?         @db.Decimal(14, 2)
+  vatRate         Decimal?         @db.Decimal(5, 2)
+  minStock        Decimal          @default(0) @db.Decimal(14, 3)
+  reorderQty      Decimal?         @db.Decimal(14, 3)
+  imageUrl        String?
+  active          Boolean          @default(true)
+  deletedAt       DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  business        Business         @relation(fields: [businessId], references: [id])
+  category        Category?        @relation(fields: [categoryId], references: [id])
+  stock           StockLevel?
+  movements       StockMovement[]
+  saleItems       SaleItem[]
+  stockCountItems StockCountItem[]
+
+  @@unique([businessId, sku])
+  @@unique([businessId, barcode])
+  @@index([businessId])
+  @@index([barcode])
+  @@index([createdAt])
+}
+
+model StockLevel {
+  productId  String   @id @db.Uuid
+  businessId String   @db.Uuid
+  quantity   Decimal  @default(0) @db.Decimal(14, 3)
+  updatedAt  DateTime @updatedAt
+  product    Product  @relation(fields: [productId], references: [id])
+
+  @@index([businessId])
+}
+
+model StockMovement {
+  id             String       @id @default(uuid()) @db.Uuid
+  businessId     String       @db.Uuid
+  productId      String       @db.Uuid
+  userId         String       @db.Uuid
+  type           MovementType
+  quantityChange Decimal      @db.Decimal(14, 3)
+  unitCost       Decimal?     @db.Decimal(14, 2)
+  reason         String?
+  reference      String?
+  supplier       String?
+  notes          String?
+  idempotencyKey String?
+  createdAt      DateTime     @default(now())
+  product        Product      @relation(fields: [productId], references: [id])
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([productId])
+  @@index([createdAt])
+}
+
+model Customer {
+  id          String    @id @default(uuid()) @db.Uuid
+  businessId  String    @db.Uuid
+  name        String
+  phone       String?
+  notes       String?
+  creditLimit Decimal?  @db.Decimal(14, 2)
+  balance     Decimal   @default(0) @db.Decimal(14, 2)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  business    Business  @relation(fields: [businessId], references: [id])
+  sales       Sale[]
+  payments    Payment[]
+
+  @@index([businessId])
+}
+
+model Sale {
+  id                 String         @id @default(uuid()) @db.Uuid
+  businessId         String         @db.Uuid
+  customerId         String?        @db.Uuid
+  userId             String         @db.Uuid
+  saleNumber         String
+  saleDate           DateTime       @default(now())
+  subtotal           Decimal        @db.Decimal(14, 2)
+  discount           Decimal        @default(0) @db.Decimal(14, 2)
+  tax                Decimal        @default(0) @db.Decimal(14, 2)
+  total              Decimal        @db.Decimal(14, 2)
+  amountPaid         Decimal        @db.Decimal(14, 2)
+  balanceDue         Decimal        @default(0) @db.Decimal(14, 2)
+  status             String         @default("completed")
+  idempotencyKey     String?
+  idempotencyPayload String?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  business           Business       @relation(fields: [businessId], references: [id])
+  customer           Customer?      @relation(fields: [customerId], references: [id])
+  items              SaleItem[]
+  payments           Payment[]
+  returns            ReturnRecord[]
+  receipts           Receipt[]
+
+  @@unique([businessId, saleNumber])
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([saleDate])
+}
+
+model SaleItem {
+  id          String       @id @default(uuid()) @db.Uuid
+  saleId      String       @db.Uuid
+  businessId  String       @db.Uuid
+  productId   String       @db.Uuid
+  quantity    Decimal      @db.Decimal(14, 3)
+  returnedQty Decimal      @default(0) @db.Decimal(14, 3)
+  unitPrice   Decimal      @db.Decimal(14, 2)
+  unitCost    Decimal      @db.Decimal(14, 2)
+  discount    Decimal      @default(0) @db.Decimal(14, 2)
+  lineTotal   Decimal      @db.Decimal(14, 2)
+  sale        Sale         @relation(fields: [saleId], references: [id])
+  product     Product      @relation(fields: [productId], references: [id])
+  returns     ReturnItem[]
+
+  @@index([businessId])
+  @@index([productId])
+}
+
+model ReturnRecord {
+  id                 String       @id @default(uuid()) @db.Uuid
+  businessId         String       @db.Uuid
+  saleId             String       @db.Uuid
+  userId             String       @db.Uuid
+  reason             String
+  total              Decimal      @db.Decimal(14, 2)
+  refundAmount       Decimal      @default(0) @db.Decimal(14, 2)
+  restock            Boolean      @default(true)
+  idempotencyKey     String?
+  idempotencyPayload String?
+  createdAt          DateTime     @default(now())
+  business           Business     @relation(fields: [businessId], references: [id])
+  sale               Sale         @relation(fields: [saleId], references: [id])
+  items              ReturnItem[]
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([saleId])
+}
+
+model ReturnItem {
+  id         String       @id @default(uuid()) @db.Uuid
+  returnId   String       @db.Uuid
+  saleItemId String       @db.Uuid
+  quantity   Decimal      @db.Decimal(14, 3)
+  unitPrice  Decimal      @db.Decimal(14, 2)
+  lineTotal  Decimal      @db.Decimal(14, 2)
+  return     ReturnRecord @relation(fields: [returnId], references: [id])
+  saleItem   SaleItem     @relation(fields: [saleItemId], references: [id])
+
+  @@unique([returnId, saleItemId])
+}
+
+model Receipt {
+  id            String   @id @default(uuid()) @db.Uuid
+  businessId    String   @db.Uuid
+  saleId        String   @unique @db.Uuid
+  receiptNumber String
+  snapshot      Json
+  createdAt     DateTime @default(now())
+  sale          Sale     @relation(fields: [saleId], references: [id])
+
+  @@unique([businessId, receiptNumber])
+  @@index([businessId])
+}
+
+model Payment {
+  id                 String    @id @default(uuid()) @db.Uuid
+  businessId         String    @db.Uuid
+  saleId             String?   @db.Uuid
+  customerId         String?   @db.Uuid
+  method             PayMethod
+  amount             Decimal   @db.Decimal(14, 2)
+  reference          String?
+  status             String    @default("PAID")
+  checkoutRequestId  String?   @unique
+  settledAt          DateTime?
+  idempotencyKey     String?
+  idempotencyPayload String?
+  createdAt          DateTime  @default(now())
+  sale               Sale?     @relation(fields: [saleId], references: [id])
+  customer           Customer? @relation(fields: [customerId], references: [id])
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId])
+  @@index([createdAt])
+}
+
+model StockCount {
+  id         String           @id @default(uuid()) @db.Uuid
+  businessId String           @db.Uuid
+  userId     String           @db.Uuid
+  status     String           @default("open")
+  notes      String?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+  items      StockCountItem[]
+
+  @@index([businessId])
+}
+
+model StockCountItem {
+  id           String     @id @default(uuid()) @db.Uuid
+  stockCountId String     @db.Uuid
+  productId    String     @db.Uuid
+  systemQty    Decimal    @db.Decimal(14, 3)
+  countedQty   Decimal?   @db.Decimal(14, 3)
+  count        StockCount @relation(fields: [stockCountId], references: [id])
+  product      Product    @relation(fields: [productId], references: [id])
+
+  @@unique([stockCountId, productId])
+}
+
+model Alert {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  productId  String   @db.Uuid
+  kind       String
+  read       Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id])
+
+  @@index([businessId])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  userId     String   @db.Uuid
+  action     String
+  entity     String
+  entityId   String?
+  meta       Json?
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id])
+
+  @@index([businessId])
+  @@index([createdAt])
+}
