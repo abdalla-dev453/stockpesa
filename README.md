@@ -95,6 +95,7 @@ The project follows a modular git workflow with specialized branches pushed to t
 
 - **Multi-Tenant Staff RBAC:** Dedicated Owner, Manager, Cashier, and Storekeeper roles with strict endpoint authorization guards.
 - **Catalogue & Inventory Control:** Product and category management, barcode search, paginated product browsing, and CSV bulk import with dry-run preview and idempotent execution.
+- **V2 Phase A Product Power:** Product variants with separate stock ledgers, component bundles, unit conversion rules, image URL metadata, business tags, promotional prices, product status, and price history. Existing product and sale records remain readable.
 - **Stock Movement Ledger:** Audited stock intake, negative stock protection, manager override audit logs, stock counts, and automated low-stock / out-of-stock alerts.
 - **Point of Sale (POS) & Checkout:** Instant cash, bank transfer, card, customer credit, M-Pesa mock flow, and manual M-Pesa receipt verification with idempotency keys.
 - **Customer Credit & Debt Ledger:** Customer balances, per-customer credit limits, debt repayment tracking, and balance-bounded partial payments.
@@ -236,6 +237,7 @@ Comprehensive guides, specifications, and collateral are located in `docs/` and 
 | [V1.1 Manual QA](docs/v1.1-manual-qa.md) | Category, theme, consent, regression, push and release-gate checklist |
 | [V1.1 Release Notes](docs/v1.1-release-notes.md) | Implemented slice and remaining environment-dependent release work |
 | [V1.1 Security Checklist](docs/v1.1-security-compliance-checklist.md) | Deployment security checks and Kenya privacy review items |
+| [V2 Phase A Product Power](docs/v2-phase-a-product-power.md) | Phase A schema, API contract, Flutter workflows, verification and demo script |
 | [Investor One-Pager](docs/investor-one-pager.md)               | Market opportunity, problem/solution overview, and commercial model           |
 | [Mobile Client Guide](mobile/README.md)                        | Flutter application architecture, screen routing map, and mobile test guide   |
 

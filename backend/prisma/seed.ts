@@ -117,6 +117,54 @@ async function main() {
       });
     prods.push(p);
   }
+  const oil = prods[P.findIndex((row) => row[0] === "Cooking Oil 1L")];
+  const oilVariant = await db.productVariant.create({
+    data: {
+      businessId: b.id,
+      productId: oil.id,
+      name: "500ml",
+      attributes: { size: "500ml" },
+      sku: "OIL-500ML",
+      unit: "bottle",
+      buyingPrice: 135,
+      sellingPrice: 165,
+      minStock: 8,
+      quantity: 24,
+    },
+  });
+  await db.variantStockMovement.create({
+    data: {
+      businessId: b.id,
+      variantId: oilVariant.id,
+      userId: owner.id,
+      quantityChange: 24,
+      unitCost: 135,
+      reason: "Opening stock",
+    },
+  });
+  const stationeryBundle = await db.product.create({
+    data: {
+      businessId: b.id,
+      categoryId: cats.Stationery,
+      name: "School Starter Pack",
+      sku: "BUNDLE-SCHOOL-01",
+      unit: "pack",
+      buyingPrice: 51,
+      sellingPrice: 70,
+    },
+  });
+  await db.productBundle.create({ data: { businessId: b.id, productId: stationeryBundle.id } });
+  await db.bundleItem.createMany({
+    data: [
+      { businessId: b.id, bundleProductId: stationeryBundle.id, componentId: prods[P.findIndex((row) => row[0] === "Exercise Book")].id, quantity: 1 },
+      { businessId: b.id, bundleProductId: stationeryBundle.id, componentId: prods[P.findIndex((row) => row[0] === "Pen Blue")].id, quantity: 1 },
+    ],
+  });
+  await db.unitConversion.create({
+    data: { businessId: b.id, productId: oil.id, fromUnit: "litre", toUnit: "millilitre", multiplier: 1000 },
+  });
+  const promoTag = await db.productTag.create({ data: { businessId: b.id, name: "Fast-moving" } });
+  await db.productTagAssignment.create({ data: { businessId: b.id, productId: prods[0].id, tagId: promoTag.id } });
   const cust = await db.customer.create({
     data: {
       businessId: b.id,

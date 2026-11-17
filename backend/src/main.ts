@@ -40,6 +40,11 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule, { bodyParser: false });
   const server = app.getHttpAdapter().getInstance();
+  // Keep V1 paths working while exposing the canonical versioned V2 contract.
+  server.use((req, _res, next) => {
+    if (req.url === "/api/v1" || req.url.startsWith("/api/v1/")) req.url = req.url.slice(7) || "/";
+    next();
+  });
   server.disable("x-powered-by");
   server.use(express.json({ limit: "256kb" }));
   server.use(express.urlencoded({ limit: "256kb", extended: true }));
@@ -59,7 +64,7 @@ async function bootstrap() {
     },
     credentials: true,
     maxAge: 600,
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key", "X-Mpesa-Signature"],
   });
 
@@ -119,7 +124,7 @@ async function bootstrap() {
   if (!production || process.env.ENABLE_SWAGGER === "true") {
     const doc = SwaggerModule.createDocument(
       app,
-      new DocumentBuilder().setTitle("StockPesa API").addBearerAuth().build(),
+      new DocumentBuilder().setTitle("StockPesa API").setDescription("Canonical API base: /api/v1. Unversioned V1 paths remain available during migration.").addServer("/api/v1").addBearerAuth().build(),
     );
     SwaggerModule.setup("docs", app, doc);
   }

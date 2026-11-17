@@ -262,6 +262,47 @@ class _SellScreenState extends ConsumerState<SellScreen> {
   }
 
   Future<void> _add(Map<String, dynamic> product) async {
+    if (product['variantId'] == null) {
+      try {
+        final variants =
+            (await dio.get('/products/${product['id']}/variants')).data as List;
+        if (variants.isNotEmpty && mounted) {
+          final selected = await showModalBottomSheet<Map<String, dynamic>>(
+            context: context,
+            showDragHandle: true,
+            builder: (context) => SafeArea(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  const ListTile(title: Text('Choose size or type')),
+                  ...variants.map((value) {
+                    final row = Map<String, dynamic>.from(value as Map);
+                    return ListTile(
+                      title: Text(row['name']?.toString() ?? 'Variant'),
+                      subtitle: Text(
+                        '${row['quantity'] ?? 0} available · ${kes(numberValue(row['sellingPrice']))}',
+                      ),
+                      onTap: () => Navigator.pop(context, {
+                        ...row,
+                        'id': row['id'],
+                        'variantId': row['id'],
+                        'parentProductId': product['id'],
+                        'name': '${product['name']} · ${row['name']}',
+                      }),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          );
+          if (selected == null) return;
+          product = selected;
+        }
+      } catch (error) {
+        _message(apiError(error));
+        return;
+      }
+    }
     final id = product['id'].toString();
     await _setQuantity(product, (_cart[id] == null ? 0 : _qty(_cart[id]!)) + 1);
   }
@@ -677,7 +718,15 @@ class _SellScreenState extends ConsumerState<SellScreen> {
 
     final request = <String, dynamic>{
       'items': _cart.values
-          .map((item) => {'productId': item['id'], 'quantity': _qty(item)})
+          .map(
+            (item) => {
+              if (item['variantId'] != null)
+                'variantId': item['variantId']
+              else
+                'productId': item['id'],
+              'quantity': _qty(item),
+            },
+          )
           .toList(),
       'method': _method,
       'amountPaid': paid,

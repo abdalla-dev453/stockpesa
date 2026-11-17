@@ -30,43 +30,58 @@ enum PayMethod {
   CREDIT
 }
 
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+  DISCONTINUED
+  OUT_OF_SEASON
+}
+
 model Business {
-  id            String         @id @default(uuid()) @db.Uuid
-  name          String
-  type          String
-  phone         String?
-  location      String?
-  currency      String         @default("KES")
-  vatEnabled    Boolean        @default(false)
-  receiptFooter String?
-  logoUrl       String?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  users         User[]
-  products      Product[]
-  categories    Category[]
-  customers     Customer[]
-  sales         Sale[]
-  alerts        Alert[]
-  audits        AuditLog[]
-  returns       ReturnRecord[]
+  id                    String                 @id @default(uuid()) @db.Uuid
+  name                  String
+  type                  String
+  phone                 String?
+  location              String?
+  currency              String                 @default("KES")
+  vatEnabled            Boolean                @default(false)
+  receiptFooter         String?
+  logoUrl               String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  users                 User[]
+  products              Product[]
+  variants              ProductVariant[]
+  bundles               ProductBundle[]
+  bundleItems           BundleItem[]
+  unitConversions       UnitConversion[]
+  productTags           ProductTag[]
+  productTagAssignments ProductTagAssignment[]
+  productImages         ProductImage[]
+  priceHistory          ProductPriceHistory[]
+  categories            Category[]
+  customers             Customer[]
+  sales                 Sale[]
+  alerts                Alert[]
+  audits                AuditLog[]
+  returns               ReturnRecord[]
 }
 
 model User {
-  id           String    @id @default(uuid()) @db.Uuid
-  businessId   String    @db.Uuid
-  fullName     String
-  phone        String    @unique
-  email        String    @unique
-  passwordHash String
-  refreshHash  String?
-  role         Role
-  deletedAt    DateTime?
+  id              String    @id @default(uuid()) @db.Uuid
+  businessId      String    @db.Uuid
+  fullName        String
+  phone           String    @unique
+  email           String    @unique
+  passwordHash    String
+  refreshHash     String?
+  role            Role
+  deletedAt       DateTime?
   termsAcceptedAt DateTime?
-  termsVersion String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  business     Business  @relation(fields: [businessId], references: [id])
+  termsVersion    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  business        Business  @relation(fields: [businessId], references: [id])
 
   @@index([businessId])
 }
@@ -84,32 +99,46 @@ model Category {
 }
 
 model Product {
-  id              String           @id @default(uuid()) @db.Uuid
-  businessId      String           @db.Uuid
-  categoryId      String?          @db.Uuid
-  name            String
-  sku             String?
-  barcode         String?
-  brand           String?
-  description     String?
-  unit            String           @default("piece")
-  buyingPrice     Decimal          @db.Decimal(14, 2)
-  sellingPrice    Decimal          @db.Decimal(14, 2)
-  wholesalePrice  Decimal?         @db.Decimal(14, 2)
-  vatRate         Decimal?         @db.Decimal(5, 2)
-  minStock        Decimal          @default(0) @db.Decimal(14, 3)
-  reorderQty      Decimal?         @db.Decimal(14, 3)
-  imageUrl        String?
-  active          Boolean          @default(true)
-  deletedAt       DateTime?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
-  business        Business         @relation(fields: [businessId], references: [id])
-  category        Category?        @relation(fields: [categoryId], references: [id])
-  stock           StockLevel?
-  movements       StockMovement[]
-  saleItems       SaleItem[]
-  stockCountItems StockCountItem[]
+  id                 String                 @id @default(uuid()) @db.Uuid
+  businessId         String                 @db.Uuid
+  categoryId         String?                @db.Uuid
+  name               String
+  sku                String?
+  barcode            String?
+  brand              String?
+  description        String?
+  unit               String                 @default("piece")
+  buyingPrice        Decimal                @db.Decimal(14, 2)
+  sellingPrice       Decimal                @db.Decimal(14, 2)
+  wholesalePrice     Decimal?               @db.Decimal(14, 2)
+  vatRate            Decimal?               @db.Decimal(5, 2)
+  minStock           Decimal                @default(0) @db.Decimal(14, 3)
+  reorderQty         Decimal?               @db.Decimal(14, 3)
+  imageUrl           String?
+  active             Boolean                @default(true)
+  deletedAt          DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+  business           Business               @relation(fields: [businessId], references: [id])
+  category           Category?              @relation(fields: [categoryId], references: [id])
+  stock              StockLevel?
+  movements          StockMovement[]
+  saleItems          SaleItem[]
+  stockCountItems    StockCountItem[]
+  variants           ProductVariant[]
+  bundle             ProductBundle?
+  bundleItems        BundleItem[]           @relation("BundleProduct")
+  componentInBundles BundleItem[]           @relation("BundleComponent")
+  images             ProductImage[]
+  unitConversions    UnitConversion[]
+  productTags        ProductTagAssignment[]
+  priceHistory       ProductPriceHistory[]
+  promotionalPrice   Decimal?               @db.Decimal(14, 2)
+  promotionStartsAt  DateTime?
+  promotionEndsAt    DateTime?
+  status             ProductStatus          @default(ACTIVE)
+  expiryTracking     Boolean                @default(false)
+  batchTracking      Boolean                @default(false)
 
   @@unique([businessId, sku])
   @@unique([businessId, barcode])
@@ -126,6 +155,150 @@ model StockLevel {
   product    Product  @relation(fields: [productId], references: [id])
 
   @@index([businessId])
+}
+
+model ProductVariant {
+  id                String                 @id @default(uuid()) @db.Uuid
+  businessId        String                 @db.Uuid
+  productId         String                 @db.Uuid
+  name              String
+  attributes        Json
+  sku               String?
+  barcode           String?
+  unit              String
+  buyingPrice       Decimal                @db.Decimal(14, 2)
+  sellingPrice      Decimal                @db.Decimal(14, 2)
+  wholesalePrice    Decimal?               @db.Decimal(14, 2)
+  promotionalPrice  Decimal?               @db.Decimal(14, 2)
+  promotionStartsAt DateTime?
+  promotionEndsAt   DateTime?
+  minStock          Decimal                @default(0) @db.Decimal(14, 3)
+  quantity          Decimal                @default(0) @db.Decimal(14, 3)
+  active            Boolean                @default(true)
+  deletedAt         DateTime?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  business          Business               @relation(fields: [businessId], references: [id])
+  product           Product                @relation(fields: [productId], references: [id])
+  movements         VariantStockMovement[]
+  saleItems         SaleItem[]
+
+  @@unique([businessId, sku])
+  @@unique([businessId, barcode])
+  @@index([businessId, productId])
+}
+
+model VariantStockMovement {
+  id             String         @id @default(uuid()) @db.Uuid
+  businessId     String         @db.Uuid
+  variantId      String         @db.Uuid
+  userId         String         @db.Uuid
+  quantityChange Decimal        @db.Decimal(14, 3)
+  unitCost       Decimal?       @db.Decimal(14, 2)
+  reason         String?
+  reference      String?
+  idempotencyKey String?
+  createdAt      DateTime       @default(now())
+  variant        ProductVariant @relation(fields: [variantId], references: [id])
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId, variantId, createdAt])
+}
+
+model ProductBundle {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  productId  String   @unique @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id])
+  product    Product  @relation(fields: [productId], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([businessId])
+}
+
+model BundleItem {
+  id              String   @id @default(uuid()) @db.Uuid
+  businessId      String   @db.Uuid
+  bundleProductId String   @db.Uuid
+  componentId     String   @db.Uuid
+  quantity        Decimal  @db.Decimal(14, 3)
+  business        Business @relation(fields: [businessId], references: [id])
+  bundle          Product  @relation("BundleProduct", fields: [bundleProductId], references: [id])
+  component       Product  @relation("BundleComponent", fields: [componentId], references: [id])
+
+  @@unique([bundleProductId, componentId])
+  @@index([businessId, componentId])
+}
+
+model UnitConversion {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  productId  String?  @db.Uuid
+  fromUnit   String
+  toUnit     String
+  multiplier Decimal  @db.Decimal(14, 6)
+  business   Business @relation(fields: [businessId], references: [id])
+  product    Product? @relation(fields: [productId], references: [id])
+
+  @@unique([businessId, productId, fromUnit, toUnit])
+  @@index([businessId])
+}
+
+model ProductImage {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  productId  String   @db.Uuid
+  url        String
+  altText    String?
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id])
+  product    Product  @relation(fields: [productId], references: [id])
+
+  @@index([businessId, productId, sortOrder])
+}
+
+model ProductTag {
+  id         String                 @id @default(uuid()) @db.Uuid
+  businessId String                 @db.Uuid
+  name       String
+  color      String?
+  business   Business               @relation(fields: [businessId], references: [id])
+  products   ProductTagAssignment[]
+
+  @@unique([businessId, name])
+}
+
+model ProductTagAssignment {
+  businessId String     @db.Uuid
+  productId  String     @db.Uuid
+  tagId      String     @db.Uuid
+  business   Business   @relation(fields: [businessId], references: [id])
+  product    Product    @relation(fields: [productId], references: [id])
+  tag        ProductTag @relation(fields: [tagId], references: [id])
+
+  @@id([productId, tagId])
+  @@index([businessId])
+}
+
+model ProductPriceHistory {
+  id                String   @id @default(uuid()) @db.Uuid
+  businessId        String   @db.Uuid
+  productId         String   @db.Uuid
+  userId            String   @db.Uuid
+  oldBuyingPrice    Decimal  @db.Decimal(14, 2)
+  oldSellingPrice   Decimal  @db.Decimal(14, 2)
+  oldWholesalePrice Decimal? @db.Decimal(14, 2)
+  buyingPrice       Decimal  @db.Decimal(14, 2)
+  sellingPrice      Decimal  @db.Decimal(14, 2)
+  wholesalePrice    Decimal? @db.Decimal(14, 2)
+  reason            String?
+  createdAt         DateTime @default(now())
+  business          Business @relation(fields: [businessId], references: [id])
+  product           Product  @relation(fields: [productId], references: [id])
+
+  @@index([businessId, productId, createdAt])
 }
 
 model StockMovement {
@@ -200,18 +373,20 @@ model Sale {
 }
 
 model SaleItem {
-  id          String       @id @default(uuid()) @db.Uuid
-  saleId      String       @db.Uuid
-  businessId  String       @db.Uuid
-  productId   String       @db.Uuid
-  quantity    Decimal      @db.Decimal(14, 3)
-  returnedQty Decimal      @default(0) @db.Decimal(14, 3)
-  unitPrice   Decimal      @db.Decimal(14, 2)
-  unitCost    Decimal      @db.Decimal(14, 2)
-  discount    Decimal      @default(0) @db.Decimal(14, 2)
-  lineTotal   Decimal      @db.Decimal(14, 2)
-  sale        Sale         @relation(fields: [saleId], references: [id])
-  product     Product      @relation(fields: [productId], references: [id])
+  id          String          @id @default(uuid()) @db.Uuid
+  saleId      String          @db.Uuid
+  businessId  String          @db.Uuid
+  productId   String          @db.Uuid
+  variantId   String?         @db.Uuid
+  quantity    Decimal         @db.Decimal(14, 3)
+  returnedQty Decimal         @default(0) @db.Decimal(14, 3)
+  unitPrice   Decimal         @db.Decimal(14, 2)
+  unitCost    Decimal         @db.Decimal(14, 2)
+  discount    Decimal         @default(0) @db.Decimal(14, 2)
+  lineTotal   Decimal         @db.Decimal(14, 2)
+  sale        Sale            @relation(fields: [saleId], references: [id])
+  product     Product         @relation(fields: [productId], references: [id])
+  variant     ProductVariant? @relation(fields: [variantId], references: [id])
   returns     ReturnItem[]
 
   @@index([businessId])
@@ -331,20 +506,20 @@ model Alert {
 }
 
 model NotificationPreference {
-  id                String   @id @default(uuid()) @db.Uuid
-  businessId        String   @db.Uuid
-  userId            String   @db.Uuid
-  lowStock          Boolean  @default(true)
-  outOfStock        Boolean  @default(true)
-  dailySummary      Boolean  @default(true)
-  creditSale        Boolean  @default(true)
-  customerPayment   Boolean  @default(true)
-  debtThresholdEnabled Boolean @default(true)
-  debtThreshold    Decimal  @default(10000) @db.Decimal(14, 2)
-  securityAlerts    Boolean  @default(true)
-  newSale           Boolean  @default(false)
-  marketing         Boolean  @default(false)
-  updatedAt         DateTime @updatedAt
+  id                   String   @id @default(uuid()) @db.Uuid
+  businessId           String   @db.Uuid
+  userId               String   @db.Uuid
+  lowStock             Boolean  @default(true)
+  outOfStock           Boolean  @default(true)
+  dailySummary         Boolean  @default(true)
+  creditSale           Boolean  @default(true)
+  customerPayment      Boolean  @default(true)
+  debtThresholdEnabled Boolean  @default(true)
+  debtThreshold        Decimal  @default(10000) @db.Decimal(14, 2)
+  securityAlerts       Boolean  @default(true)
+  newSale              Boolean  @default(false)
+  marketing            Boolean  @default(false)
+  updatedAt            DateTime @updatedAt
 
   @@unique([businessId, userId])
   @@index([businessId])

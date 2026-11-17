@@ -38,7 +38,8 @@ import { StockModule, StockService } from "../stock/stock.module";
 import { cents, money, multiplyUnitCents, quantityMilli } from "../common/money";
 import { planMpesaCheckout } from "../common/mpesa-checkout";
 class ItemDto {
-  @IsUUID() productId: string;
+  @IsOptional() @IsUUID() productId?: string;
+  @IsOptional() @IsUUID() variantId?: string;
   @IsNumber({ maxDecimalPlaces: 3 }) @Min(0.001) quantity: number;
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) discount?: number;
 }
@@ -70,6 +71,8 @@ class SalesController {
   ) {}
   @Post() @Roles("OWNER", "MANAGER", "CASHIER") create(@Me() u, @Body() d: SaleDto, @Headers("idempotency-key") key?: string) {
     if (!d.items?.length) throw new BadRequestException("Cart is empty");
+    if (d.items.some((item) => (!!item.productId === !!item.variantId)))
+      throw new BadRequestException("Choose exactly one product or product variant for each sale item");
     if (key && (key.length > 128 || !/^[\w.-]+$/.test(key))) throw new BadRequestException("Invalid Idempotency-Key");
     const payload = createHash("sha256").update(JSON.stringify(d)).digest("hex");
     return this.db.$transaction(async (tx) => {
@@ -84,29 +87,50 @@ class SalesController {
       let subtotalCents = 0;
       const lines = [];
       for (const it of d.items) {
-        const p = await tx.product.findFirst({
-          where: {
-            id: it.productId,
-            businessId: u.businessId,
-            deletedAt: null,
-            active: true,
-          },
-          include: { stock: true },
-        });
-        if (!p) throw new BadRequestException("Product not found");
-        const avail = Number(p.stock?.quantity ?? 0);
+        const variant = it.variantId ? await tx.productVariant.findFirst({
+          where: { id: it.variantId, businessId: u.businessId, deletedAt: null, active: true, product: { deletedAt: null, active: true } },
+          include: { product: true },
+        }) : null;
+        const product: any = it.productId ? await tx.product.findFirst({
+          where: { id: it.productId, businessId: u.businessId, deletedAt: null, active: true },
+          include: { stock: true, variants: { where: { deletedAt: null } } },
+        }) : variant?.product ?? null;
+        if (!product || (it.variantId && !variant)) throw new BadRequestException("Product not found");
+        if (!it.variantId && product.variants.length > 0) throw new BadRequestException(`Choose a variant for ${product.name}`);
+        const bundleComponents: any[] = it.productId ? await tx.bundleItem.findMany({
+          where: { businessId: u.businessId, bundleProductId: product.id },
+          include: { component: { include: { stock: true } } },
+        }) : [];
+        if (bundleComponents.length) {
+          for (const item of bundleComponents) {
+            const available = Number(item.component.stock?.quantity ?? 0);
+            const required = Number(item.quantity) * it.quantity;
+            if (required > available && (!["OWNER", "MANAGER"].includes(u.role) || !d.overrideReason))
+              throw new BadRequestException(`Only ${available} of ${item.component.name} in stock for this bundle`);
+          }
+        }
+        const saleProduct: any = variant ?? product;
+        const avail = bundleComponents.length ? Infinity : Number(variant?.quantity ?? product.stock?.quantity ?? 0);
+        const now = new Date();
+        const promoPrice = saleProduct.promotionalPrice != null &&
+          (!saleProduct.promotionStartsAt || saleProduct.promotionStartsAt <= now) &&
+          (!saleProduct.promotionEndsAt || saleProduct.promotionEndsAt >= now)
+          ? saleProduct.promotionalPrice : null;
+        const bundleCost = bundleComponents.reduce((sum, row) => sum + Number(row.component.buyingPrice) * Number(row.quantity), 0);
+        const priced = { ...product, ...saleProduct, id: product.id, variantId: variant?.id, name: variant ? `${product.name} · ${variant.name}` : product.name,
+          sku: variant?.sku ?? product.sku, sellingPrice: promoPrice ?? saleProduct.sellingPrice, buyingPrice: bundleComponents.length ? bundleCost : saleProduct.buyingPrice };
         if (it.quantity > avail) {
           if (!["OWNER", "MANAGER"].includes(u.role))
-            throw new ForbiddenException(`Only ${avail} of ${p.name} in stock`);
+            throw new ForbiddenException(`Only ${avail} of ${priced.name} in stock`);
           if (!d.overrideReason)
             throw new BadRequestException(
-              `Only ${avail} of ${p.name} in stock. Provide overrideReason to oversell`,
+              `Only ${avail} of ${priced.name} in stock. Provide overrideReason to oversell`,
             );
         }
-        const lineCents = multiplyUnitCents(p.sellingPrice, it.quantity) - cents(it.discount);
-        if (lineCents < 0) throw new BadRequestException(`Discount exceeds the line total for ${p.name}`);
+        const lineCents = multiplyUnitCents(priced.sellingPrice, it.quantity) - cents(it.discount);
+        if (lineCents < 0) throw new BadRequestException(`Discount exceeds the line total for ${priced.name}`);
         subtotalCents += lineCents;
-        lines.push({ p, it, line: money(lineCents) });
+        lines.push({ p: priced, it, variant, bundleComponents, line: money(lineCents) });
       }
       const subtotal = money(subtotalCents);
       const totalCents = subtotalCents - cents(d.discount);
@@ -185,6 +209,7 @@ class SalesController {
             create: lines.map((l) => ({
               businessId: u.businessId,
               productId: l.p.id,
+              ...(l.variant ? { variantId: l.variant.id } : {}),
               quantity: l.it.quantity,
               unitPrice: l.p.sellingPrice,
               unitCost: l.p.buyingPrice,
@@ -195,8 +220,21 @@ class SalesController {
         },
         include: { items: true },
       });
-      for (const l of lines)
-        await this.stock.move(tx, {
+      for (const l of lines) {
+        if (l.bundleComponents.length) {
+          for (const component of l.bundleComponents) await this.stock.move(tx, {
+            businessId: u.businessId, userId: u.sub, productId: component.componentId,
+            type: "sale_out", change: -Number(component.quantity) * l.it.quantity,
+            reference: sale.saleNumber,
+            allowNegative: ["OWNER", "MANAGER"].includes(u.role) && !!d.overrideReason,
+            overrideReason: d.overrideReason,
+          });
+        } else if (l.variant) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${u.businessId + ":variant:" + l.variant.id}))`;
+          const updated = await tx.productVariant.updateMany({ where: { id: l.variant.id, businessId: u.businessId, ...( !( ["OWNER", "MANAGER"].includes(u.role) && !!d.overrideReason) ? { quantity: { gte: l.it.quantity } } : {}) }, data: { quantity: { decrement: l.it.quantity } } });
+          if (updated.count !== 1) throw new ForbiddenException(`Not enough ${l.p.name} in stock`);
+          await tx.variantStockMovement.create({ data: { businessId: u.businessId, variantId: l.variant.id, userId: u.sub, quantityChange: -l.it.quantity, reason: "sale", reference: sale.saleNumber } });
+        } else await this.stock.move(tx, {
           businessId: u.businessId,
           userId: u.sub,
           productId: l.p.id,
@@ -206,6 +244,7 @@ class SalesController {
           allowNegative: ["OWNER", "MANAGER"].includes(u.role) && !!d.overrideReason,
           overrideReason: d.overrideReason,
         });
+      }
       const payment = d.method === "CREDIT" ? null : await tx.payment.create({
           data: {
             businessId: u.businessId,
@@ -346,7 +385,15 @@ class SalesController {
       }
       for (const row of returned) {
         await tx.saleItem.update({ where: { id: row.item.id }, data: { returnedQty: { increment: row.quantity } } });
-        if (d.restock) await this.stock.move(tx, { businessId: u.businessId, userId: u.sub, productId: row.item.productId, type: "return_in", change: row.quantity, reason: d.reason, reference: sale.saleNumber });
+        if (d.restock && row.item.variantId) {
+          await tx.productVariant.update({ where: { id: row.item.variantId }, data: { quantity: { increment: row.quantity } } });
+          await tx.variantStockMovement.create({ data: { businessId: u.businessId, variantId: row.item.variantId, userId: u.sub, quantityChange: row.quantity, reason: `return: ${d.reason}`, reference: sale.saleNumber } });
+        } else if (d.restock) {
+          const components = await tx.bundleItem.findMany({ where: { businessId: u.businessId, bundleProductId: row.item.productId } });
+          if (components.length) {
+            for (const component of components) await this.stock.move(tx, { businessId: u.businessId, userId: u.sub, productId: component.componentId, type: "return_in", change: Number(component.quantity) * row.quantity, reason: d.reason, reference: sale.saleNumber });
+          } else await this.stock.move(tx, { businessId: u.businessId, userId: u.sub, productId: row.item.productId, type: "return_in", change: row.quantity, reason: d.reason, reference: sale.saleNumber });
+        }
       }
       await tx.sale.update({ where: { id: sale.id }, data: { total: newTotal, amountPaid: newPaid, balanceDue: newBalance, status: allReturned ? "refunded" : "partially_returned" } });
       if (sale.customerId) {

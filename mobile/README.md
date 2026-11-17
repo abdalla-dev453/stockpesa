@@ -66,8 +66,8 @@ On screens narrower than 600 logical pixels, navigation uses a bottom bar. Wider
 ## Screen descriptions
 
 - **Home:** current-day/month sales, stock warnings, unread alert count, and shortcuts into selling and inventory.
-- **Products:** searchable catalogue with stock/category filters, product detail/edit, barcode scan/create, and CSV import.
-- **Sell:** searchable/scannable catalogue and editable cart, saved/parked carts, discount, payment selection, customer credit checks, cash change, and idempotent checkout. The payment step clearly shows server-side payment limitations.
+- **Products:** searchable catalogue with stock/category filters, product detail/edit, barcode scan/create, and CSV import. Product details can manage variants and their stock, bundle contents, image URLs, tags, promotions, and unit conversions, and review price changes.
+- **Sell:** searchable/scannable catalogue and editable cart, saved/parked carts, discount, payment selection, customer credit checks, cash change, and idempotent checkout. Products with variants prompt for the option; scanning a variant barcode selects it directly. The payment step clearly shows server-side payment limitations.
 - **Receipt:** backend receipt snapshot rendered as a preview with PDF share/download and a text summary. Print integration is identified as unavailable.
 - **Customers:** search/edit, debt-only filter, unpaid and recent purchases, payment recording, and customer-prefilled sale start.
 - **Sales history:** transaction actions include receipt, sharing, and a quantity-limited return with explicit restock choice and recorded refund/balance summary.
