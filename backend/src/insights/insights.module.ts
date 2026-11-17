@@ -17,22 +17,40 @@ class AlertsController {
   constructor(private db: PrismaService) {}
   @Get() async list(@Me() u, @Query("unread") unread?: string, @Query("page") pageText?: string, @Query("limit") limitText?: string) {
     const page = Math.max(1, Number(pageText) || 1), limit = Math.min(100, Math.max(1, Number(limitText) || 20));
-    const where: any = { businessId: u.businessId, ...(unread === "true" ? { read: false } : {}) };
-    const [total, unreadCount, rows] = await Promise.all([
-      this.db.alert.count({ where }),
-      this.db.alert.count({ where: { businessId: u.businessId, read: false } }),
-      this.db.alert.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+    const unreadFilter = unread === "true" ? Prisma.sql`AND a."read" = false` : Prisma.empty;
+    const [totalRows, unreadRows, rows] = await Promise.all([
+      this.db.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+        SELECT COUNT(*) AS count FROM "Alert" a
+        WHERE a."businessId" = ${u.businessId}::uuid AND (a."userId" IS NULL OR a."userId" = ${u.sub}::uuid) ${unreadFilter}
+      `),
+      this.db.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+        SELECT COUNT(*) AS count FROM "Alert" a
+        WHERE a."businessId" = ${u.businessId}::uuid AND (a."userId" IS NULL OR a."userId" = ${u.sub}::uuid) AND a."read" = false
+      `),
+      this.db.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
+        SELECT a."id", a."businessId", a."productId", a."userId", a."kind", a."title", a."body", a."data", a."critical", a."read", a."createdAt",
+          CASE WHEN p."id" IS NULL THEN NULL ELSE jsonb_build_object('id', p."id", 'name', p."name", 'minStock', p."minStock") END AS product
+        FROM "Alert" a LEFT JOIN "Product" p ON p."id" = a."productId" AND p."businessId" = a."businessId"
+        WHERE a."businessId" = ${u.businessId}::uuid AND (a."userId" IS NULL OR a."userId" = ${u.sub}::uuid) ${unreadFilter}
+        ORDER BY a."createdAt" DESC LIMIT ${limit} OFFSET ${(page - 1) * limit}
+      `),
     ]);
-    const products = await this.db.product.findMany({ where: { id: { in: rows.map((a) => a.productId) }, businessId: u.businessId }, select: { id: true, name: true, minStock: true } });
-    return { data: rows.map((a) => ({ ...a, product: products.find((p) => p.id === a.productId) ?? null })), unreadCount, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
+    const total = Number(totalRows[0]?.count ?? 0);
+    return { data: rows, unreadCount: Number(unreadRows[0]?.count ?? 0), meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
   }
   @Patch("read-all") async readAll(@Me() u) {
-    const result = await this.db.alert.updateMany({ where: { businessId: u.businessId, read: false }, data: { read: true } });
-    return { updated: result.count };
+    const updated = await this.db.$executeRaw(Prisma.sql`
+      UPDATE "Alert" SET "read" = true WHERE "businessId" = ${u.businessId}::uuid
+        AND ("userId" IS NULL OR "userId" = ${u.sub}::uuid) AND "read" = false
+    `);
+    return { updated };
   }
   @Patch(":id/read") async read(@Me() u, @Param("id", ParseUUIDPipe) id: string) {
-    const result = await this.db.alert.updateMany({ where: { id, businessId: u.businessId }, data: { read: true } });
-    if (!result.count) throw new NotFoundException("Alert not found");
+    const updated = await this.db.$executeRaw(Prisma.sql`
+      UPDATE "Alert" SET "read" = true WHERE "id" = ${id}::uuid AND "businessId" = ${u.businessId}::uuid
+        AND ("userId" IS NULL OR "userId" = ${u.sub}::uuid)
+    `);
+    if (!updated) throw new NotFoundException("Alert not found");
     return { id, read: true };
   }
 }
@@ -61,11 +79,85 @@ class ReportsController {
         FROM "Product" p LEFT JOIN "StockLevel" s ON s."productId" = p."id"
         WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
       `),
+      // Keep the overview query compatible with databases that have not yet
+      // applied the optional per-user notification migration. The dashboard
+      // only needs the existing business-wide unread count.
       this.db.alert.count({ where: { businessId: u.businessId, read: false } }),
     ]);
     const lowStock = Number(stockCounts[0]?.lowStock ?? 0);
     const outOfStock = Number(stockCounts[0]?.outOfStock ?? 0);
     return { productCount: products, salesToday: Number(salesToday._sum.total ?? 0), saleCountToday: salesToday._count, salesMonth: Number(salesMonth._sum.total ?? 0), saleCountMonth: salesMonth._count, lowStock, outOfStock, unreadAlerts };
+  }
+  @Get("market-insights") @Roles("OWNER", "MANAGER") async marketInsights(@Me() u, @Query("days") daysText?: string) {
+    const days = Number(daysText) === 7 ? 7 : 30;
+    const since = new Date(Date.now() - days * 86400000);
+    const [trend, bestSellers, slowMoving, stockHealth, runningOut] = await Promise.all([
+      this.db.$queryRaw<Array<{ day: Date; sales: Prisma.Decimal; transactions: bigint }>>(Prisma.sql`
+        SELECT DATE(s."saleDate") AS day, COALESCE(SUM(s."total"), 0)::numeric AS sales,
+          COUNT(*) AS transactions
+        FROM "Sale" s
+        WHERE s."businessId" = ${u.businessId}::uuid AND s."saleDate" >= ${since}
+          AND s."status" NOT IN ('void', 'refunded')
+        GROUP BY DATE(s."saleDate") ORDER BY day ASC
+      `),
+      this.db.$queryRaw<Array<{ id: string; name: string; quantity: Prisma.Decimal; revenue: Prisma.Decimal }>>(Prisma.sql`
+        SELECT p."id", p."name",
+          COALESCE(SUM(GREATEST(si."quantity" - si."returnedQty", 0)), 0)::numeric AS quantity,
+          COALESCE(SUM(si."lineTotal"), 0)::numeric AS revenue
+        FROM "Product" p JOIN "SaleItem" si ON si."productId" = p."id"
+        JOIN "Sale" s ON s."id" = si."saleId"
+        WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL
+          AND s."saleDate" >= ${since} AND s."status" NOT IN ('void', 'refunded')
+        GROUP BY p."id", p."name" ORDER BY quantity DESC LIMIT 5
+      `),
+      this.db.$queryRaw<Array<{ id: string; name: string; quantity: Prisma.Decimal; onHand: Prisma.Decimal }>>(Prisma.sql`
+        WITH velocity AS (
+          SELECT si."productId", SUM(GREATEST(si."quantity" - si."returnedQty", 0))::numeric AS quantity
+          FROM "SaleItem" si JOIN "Sale" s ON s."id" = si."saleId"
+          WHERE s."businessId" = ${u.businessId}::uuid AND s."saleDate" >= ${since}
+            AND s."status" NOT IN ('void', 'refunded') GROUP BY si."productId"
+        )
+        SELECT p."id", p."name", COALESCE(v.quantity, 0)::numeric AS quantity,
+          COALESCE(sl."quantity", 0)::numeric AS "onHand"
+        FROM "Product" p LEFT JOIN "StockLevel" sl ON sl."productId" = p."id"
+        LEFT JOIN velocity v ON v."productId" = p."id"
+        WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
+        ORDER BY v.quantity ASC NULLS FIRST, p."name" ASC LIMIT 5
+      `),
+      this.db.$queryRaw<Array<{ total: bigint; healthy: bigint }>>(Prisma.sql`
+        SELECT COUNT(*) AS total,
+          COUNT(*) FILTER (WHERE COALESCE(sl."quantity", 0) > p."minStock") AS healthy
+        FROM "Product" p LEFT JOIN "StockLevel" sl ON sl."productId" = p."id"
+        WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
+      `),
+      this.db.$queryRaw<Array<{ id: string; name: string; onHand: Prisma.Decimal; daily: Prisma.Decimal }>>(Prisma.sql`
+        WITH velocity AS (
+          SELECT si."productId", SUM(GREATEST(si."quantity" - si."returnedQty", 0))::numeric AS quantity
+          FROM "SaleItem" si JOIN "Sale" s ON s."id" = si."saleId"
+          WHERE s."businessId" = ${u.businessId}::uuid AND s."saleDate" >= ${since}
+            AND s."status" NOT IN ('void', 'refunded') GROUP BY si."productId"
+        )
+        SELECT p."id", p."name", COALESCE(sl."quantity", 0)::numeric AS "onHand",
+          (v.quantity / ${days}::numeric)::numeric AS daily
+        FROM "Product" p LEFT JOIN "StockLevel" sl ON sl."productId" = p."id"
+        JOIN velocity v ON v."productId" = p."id"
+        WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
+          AND v.quantity > 0
+          AND COALESCE(sl."quantity", 0) / (v.quantity / ${days}::numeric) <= 14
+        ORDER BY COALESCE(sl."quantity", 0) / (v.quantity / ${days}::numeric) ASC LIMIT 10
+      `),
+    ]);
+    const total = Number(stockHealth[0]?.total ?? 0);
+    return {
+      source: "This business's recorded sales and stock only",
+      days,
+      trend: trend.map((r) => ({ date: r.day, sales: Number(r.sales), transactions: Number(r.transactions) })),
+      bestSellers: bestSellers.map((r) => ({ id: r.id, name: r.name, quantitySold: Number(r.quantity), revenue: Number(r.revenue) })),
+      slowMoving: slowMoving.map((r) => ({ id: r.id, name: r.name, quantitySold: Number(r.quantity), onHand: Number(r.onHand) })),
+      runningOut: runningOut.map((r) => ({ id: r.id, name: r.name, onHand: Number(r.onHand), estimatedDaysRemaining: Math.ceil(Number(r.onHand) / Number(r.daily)) })),
+      stockHealth: total ? Math.round(Number(stockHealth[0].healthy) / total * 100) : null,
+      note: "Run-out timing is an estimate from the selected period's average sales velocity, not a guarantee."
+    };
   }
   @Get("sales") @Roles("OWNER", "MANAGER") async sales(@Me() u, @Query("from") from?: string, @Query("to") to?: string, @Query("page") pageText?: string, @Query("limit") limitText?: string) {
     const start = from ? new Date(from) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
