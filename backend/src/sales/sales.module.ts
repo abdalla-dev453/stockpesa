@@ -33,6 +33,7 @@ import { Type } from "class-transformer";
 import { createHash } from "node:crypto";
 import { PrismaService } from "../prisma.service";
 import { AuthGuard, Me, Roles } from "../common/auth";
+import { enqueuePushEvent } from "../notifications/push_outbox";
 import { StockModule, StockService } from "../stock/stock.module";
 import { cents, money, multiplyUnitCents, quantityMilli } from "../common/money";
 import { planMpesaCheckout } from "../common/mpesa-checkout";
@@ -145,7 +146,7 @@ class SalesController {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${d.customerId + ":customer"}))`;
       const customer = d.customerId ? await tx.customer.findFirst({
         where: { id: d.customerId, businessId: u.businessId, deletedAt: null },
-        select: { id: true, balance: true, creditLimit: true },
+        select: { id: true, name: true, balance: true, creditLimit: true },
       }) : null;
       if (d.customerId && !customer) throw new BadRequestException("Customer not found");
       const amountDue = Math.max(dueAmount, 0);
@@ -223,6 +224,34 @@ class SalesController {
           where: { id: d.customerId },
           data: { balance: { increment: sale.balanceDue } },
         });
+      if (sale.balanceDue.gt(0) && customer) {
+        const oldBalance = Number(customer.balance);
+        const newBalance = oldBalance + Number(sale.balanceDue);
+        await enqueuePushEvent(tx, {
+          businessId: u.businessId,
+          eventKey: `credit-sale:${sale.id}`,
+          kind: "credit_sale",
+          title: "Customer credit sale",
+          body: `${customer.name}: KES ${Number(sale.balanceDue).toFixed(2)} added to their balance.`,
+          data: { customerId: customer.id, path: `/customers/${customer.id}`, saleId: sale.id },
+        });
+        await enqueuePushEvent(tx, {
+          businessId: u.businessId,
+          eventKey: `debt-threshold:${sale.id}`,
+          kind: "debt_threshold",
+          title: "Customer balance threshold",
+          body: `${customer.name}'s balance is now KES ${newBalance.toFixed(2)}.`,
+          data: { customerId: customer.id, path: `/customers/${customer.id}`, oldBalance, newBalance },
+        });
+      }
+      await enqueuePushEvent(tx, {
+        businessId: u.businessId,
+        eventKey: `new-sale:${sale.id}`,
+        kind: "new_sale",
+        title: "Sale completed",
+        body: `${sale.saleNumber}: KES ${total.toFixed(2)} recorded.`,
+        data: { saleId: sale.id, path: "/reports" },
+      });
       const businessSnapshot = await tx.business.findUnique({ where: { id: u.businessId }, select: { name: true, phone: true, receiptFooter: true, currency: true } });
       const receipt = await tx.receipt.create({ data: {
         businessId: u.businessId, saleId: sale.id, receiptNumber: sale.saleNumber,

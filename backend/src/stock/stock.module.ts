@@ -15,6 +15,8 @@ import {
 } from "@nestjs/common";
 import { IsString, IsNumber, IsOptional, IsUUID, Min } from "class-validator";
 import { PrismaService } from "../prisma.service";
+import { Prisma } from "@prisma/client";
+import { enqueuePushEvent } from "../notifications/push_outbox";
 import { AuthGuard, Roles, Me } from "../common/auth";
 class IntakeDto {
   @IsUUID() productId: string;
@@ -76,7 +78,7 @@ export class StockService {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${o.productId + ":stock"}))`;
     const product = await tx.product.findFirst({
       where: { id: o.productId, businessId: o.businessId, deletedAt: null },
-      select: { id: true, minStock: true },
+      select: { id: true, name: true, minStock: true },
     });
     if (!product) throw new NotFoundException("Product not found");
     const current = await tx.stockLevel.findUnique({ where: { productId: o.productId } });
@@ -114,13 +116,41 @@ export class StockService {
       },
     });
     const q = Number(lvl.quantity);
+    const previousQuantity = Number(current?.quantity ?? 0);
+    let pushKind: string | null = null;
+    if (q <= 0 && previousQuantity > 0) pushKind = "out_of_stock";
+    else if (q > 0 && q <= Number(product.minStock) && (
+      previousQuantity > Number(product.minStock) || previousQuantity <= 0
+    )) pushKind = "low_stock";
     if (q > Number(product.minStock)) {
       await tx.alert.updateMany({ where: { businessId: o.businessId, productId: product.id, read: false }, data: { read: true } });
     } else {
       const kind = q <= 0 ? "out_of_stock" : "low_stock";
       await tx.alert.updateMany({ where: { businessId: o.businessId, productId: product.id, read: false, kind: { not: kind } }, data: { read: true } });
-      if (!(await tx.alert.findFirst({ where: { businessId: o.businessId, productId: product.id, read: false, kind } })))
-        await tx.alert.create({ data: { businessId: o.businessId, productId: product.id, kind } });
+      if (!(await tx.alert.findFirst({ where: { businessId: o.businessId, productId: product.id, read: false, kind } }))) {
+        const alert = await tx.alert.create({ data: { businessId: o.businessId, productId: product.id, kind } });
+        if (pushKind === kind) {
+          const title = kind === "out_of_stock" ? "Out of stock" : "Low stock";
+          const body = kind === "out_of_stock"
+            ? `${product.name} is out of stock (0 remaining).`
+            : `${product.name}: ${q} remaining, minimum ${Number(product.minStock)}.`;
+          await enqueuePushEvent(tx, {
+            businessId: o.businessId,
+            eventKey: `stock:${alert.id}`,
+            kind,
+            title,
+            body,
+            data: { productId: product.id, path: `/products/${product.id}`, quantity: q, minStock: Number(product.minStock) },
+            inApp: false,
+          });
+          await tx.$executeRaw(Prisma.sql`
+            UPDATE "Alert" SET "title" = ${title}, "body" = ${body},
+              "data" = ${JSON.stringify({ productId: product.id, path: `/products/${product.id}`, quantity: q, minStock: Number(product.minStock) })}::jsonb,
+              "critical" = ${kind === "out_of_stock"}, "dedupeKey" = ${`stock:${alert.id}`}
+            WHERE "id" = ${alert.id}::uuid
+          `);
+        }
+      }
     }
     return lvl;
   }

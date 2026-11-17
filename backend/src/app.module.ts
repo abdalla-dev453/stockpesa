@@ -9,6 +9,7 @@ import { BusinessModule } from "./business/business.module";
 import { CustomersModule } from "./customers/customers.module";
 import { StockCountsModule } from "./stock-counts/stock-counts.module";
 import { InsightsModule } from "./insights/insights.module";
+import { NotificationsModule } from "./notifications/notifications.module";
 import { PaymentsModule } from "./payments/payments.module";
 import { DbModule } from "./prisma.service";
 import { PrismaFilter } from "./common/filters";
@@ -25,6 +26,7 @@ import { HealthModule } from "./health/health.module";
     CustomersModule,
     StockCountsModule,
     InsightsModule,
+    NotificationsModule,
     PaymentsModule,
     HealthModule,
   ],
