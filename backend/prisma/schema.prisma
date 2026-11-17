@@ -62,6 +62,8 @@ model User {
   refreshHash  String?
   role         Role
   deletedAt    DateTime?
+  termsAcceptedAt DateTime?
+  termsVersion String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   business     Business  @relation(fields: [businessId], references: [id])
@@ -313,12 +315,69 @@ model StockCountItem {
 model Alert {
   id         String   @id @default(uuid()) @db.Uuid
   businessId String   @db.Uuid
-  productId  String   @db.Uuid
+  productId  String?  @db.Uuid
+  userId     String?  @db.Uuid
   kind       String
+  title      String?
+  body       String?
+  data       Json?
+  critical   Boolean  @default(false)
+  dedupeKey  String?  @unique
   read       Boolean  @default(false)
   createdAt  DateTime @default(now())
   business   Business @relation(fields: [businessId], references: [id])
 
+  @@index([businessId])
+}
+
+model NotificationPreference {
+  id                String   @id @default(uuid()) @db.Uuid
+  businessId        String   @db.Uuid
+  userId            String   @db.Uuid
+  lowStock          Boolean  @default(true)
+  outOfStock        Boolean  @default(true)
+  dailySummary      Boolean  @default(true)
+  creditSale        Boolean  @default(true)
+  customerPayment   Boolean  @default(true)
+  debtThresholdEnabled Boolean @default(true)
+  debtThreshold    Decimal  @default(10000) @db.Decimal(14, 2)
+  securityAlerts    Boolean  @default(true)
+  newSale           Boolean  @default(false)
+  marketing         Boolean  @default(false)
+  updatedAt         DateTime @updatedAt
+
+  @@unique([businessId, userId])
+  @@index([businessId])
+}
+
+model DeviceToken {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  userId     String   @db.Uuid
+  token      String   @unique
+  platform   String
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([businessId, userId, active])
+}
+
+model PushEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  eventKey   String   @unique
+  kind       String
+  title      String
+  body       String
+  data       Json
+  status     String   @default("PENDING")
+  attempts   Int      @default(0)
+  lastError  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([status, createdAt])
   @@index([businessId])
 }
 
