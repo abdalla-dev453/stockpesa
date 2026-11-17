@@ -83,10 +83,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
           '/products',
           queryParameters: {
             'page': page,
-            'search': search.text.trim().isEmpty ? null : search.text.trim(),
+            if (search.text.trim().isNotEmpty) 'search': search.text.trim(),
             'limit': 20,
-            'stockStatus': status,
-            'categoryId': categoryId,
+            if (status.isNotEmpty) 'stockStatus': status,
+            if (categoryId != null && categoryId!.isNotEmpty)
+              'categoryId': categoryId,
             'sortBy': sortBy == 'quantity'
                 ? 'stockQuantity'
                 : sortBy == 'price'
@@ -698,9 +699,17 @@ class _ProductsScreenState extends State<ProductsScreen> {
                 onRefresh: load,
                 child: rows.isEmpty
                     ? ListView(
-                        children: const [
-                          SizedBox(height: 120),
-                          Center(child: Text('No products found')),
+                        children: [
+                          const SizedBox(height: 48),
+                          Center(
+                            child: Image.asset(
+                              'assets/branding/empty-products.png',
+                              width: 240,
+                              height: 180,
+                              semanticLabel: 'Illustration of a stock box',
+                            ),
+                          ),
+                          const Center(child: Text('No products found')),
                         ],
                       )
                     : ListView.separated(

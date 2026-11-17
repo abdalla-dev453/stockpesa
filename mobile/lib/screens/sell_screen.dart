@@ -52,7 +52,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       .maybeWhen(
         data: (results) =>
             results.any((value) => value != ConnectivityResult.none),
-        orElse: () => false,
+        orElse: () => true,
       );
 
   double get _subtotal =>
@@ -151,8 +151,9 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         dio.get(
           '/products',
           queryParameters: {
-            'search': _search.text.trim().isEmpty ? null : _search.text.trim(),
-            'categoryId': _selectedCategory,
+            if (_search.text.trim().isNotEmpty) 'search': _search.text.trim(),
+            if (_selectedCategory != null && _selectedCategory!.isNotEmpty)
+              'categoryId': _selectedCategory,
             'stockStatus': 'ALL',
             'page': 1,
             'limit': 30,
@@ -732,7 +733,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         .maybeWhen(
           data: (results) =>
               results.any((value) => value != ConnectivityResult.none),
-          orElse: () => false,
+          orElse: () => true,
         );
     return _loading
         ? const Center(child: CircularProgressIndicator())
