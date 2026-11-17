@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api.dart';
 import '../../../core/storage/cart_store.dart';
+import '../../../core/notifications/push_notifications.dart';
 import '../../dashboard/data/dashboard_repository.dart';
 
 enum SessionStatus { loading, signedOut, signedIn }
@@ -47,6 +48,7 @@ class SessionController extends Notifier<SessionState> {
       try {
         await currentUser();
         signedIn = true;
+        await StockPesaPushNotifications.instance.registerIfAlreadyAllowed();
       } catch (_) {
         await logout();
       }
@@ -64,10 +66,12 @@ class SessionController extends Notifier<SessionState> {
 
   Future<void> signedIn() async {
     await currentUser();
+    await StockPesaPushNotifications.instance.registerIfAlreadyAllowed();
     state = state.copyWith(status: SessionStatus.signedIn);
   }
 
   Future<void> signOut() async {
+    await StockPesaPushNotifications.instance.unregisterCurrentDevice();
     await logout();
     ref.read(dashboardRepositoryProvider).clearCache();
     state = state.copyWith(status: SessionStatus.signedOut);
