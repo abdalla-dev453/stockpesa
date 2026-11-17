@@ -48,7 +48,15 @@ async function bootstrap() {
     ? corsOrigins
     : ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"];
   app.enableCors({
-    origin: (origin, callback) => callback(null, !origin || allowedOrigins.includes(origin)),
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      // In local development, permit any localhost / 127.0.0.1 port (e.g. random Flutter Chrome dev server ports)
+      if (!production && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
     credentials: true,
     maxAge: 600,
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
