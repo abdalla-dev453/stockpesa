@@ -7,14 +7,16 @@ import {
   Body,
   UnauthorizedException,
   ConflictException,
+  BadRequestException,
   UseGuards,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
-import { IsEmail, IsString, MinLength, IsOptional, Matches, MaxLength } from "class-validator";
+import { IsEmail, IsString, MinLength, IsOptional, Matches, MaxLength, IsBoolean } from "class-validator";
 import * as bcrypt from "bcrypt";
 import { PrismaService } from "../prisma.service";
 import { AuthGuard, Me } from "../common/auth";
 import { KENYAN_MOBILE_PATTERN, normalizeKenyanPhone } from "../common/phone";
+import { enqueuePushEvent } from "../notifications/push_outbox";
 function ttlSeconds(value: string | undefined, fallback: number): number {
   const match = /^(\d+)(s|m|h|d)$/.exec(value ?? "");
   if (!match) return fallback;
@@ -28,6 +30,8 @@ class RegisterDto {
   @IsString() @MinLength(8) @MaxLength(128) password: string;
   @IsString() @MinLength(2) @MaxLength(80) businessType: string;
   @IsOptional() @IsString() @MaxLength(120) location?: string;
+  @IsBoolean() acceptedTerms: boolean;
+  @IsString() @MaxLength(20) termsVersion: string;
 }
 class LoginDto {
   @IsString() identifier: string;
@@ -65,6 +69,9 @@ class AuthService {
     };
   }
   async register(d: RegisterDto) {
+    if (!d.acceptedTerms || d.termsVersion !== "1.0") {
+      throw new BadRequestException("Accept the current terms and privacy notice to create an account");
+    }
     const email = d.email.trim().toLowerCase();
     const phone = normalizeKenyanPhone(d.phone);
     try {
@@ -77,6 +84,12 @@ class AuthService {
             phone,
           },
         });
+        await tx.category.createMany({
+          data: ["Groceries", "Drinks", "Household", "Personal Care", "Hardware", "Stationery"].map((name) => ({
+            businessId: b.id,
+            name,
+          })),
+        });
         const user = await tx.user.create({
           data: {
             businessId: b.id,
@@ -85,6 +98,8 @@ class AuthService {
             phone,
             role: "OWNER",
             passwordHash: await bcrypt.hash(d.password, 10),
+            termsAcceptedAt: new Date(),
+            termsVersion: d.termsVersion,
           },
         });
         await tx.auditLog.create({ data: { businessId: b.id, userId: user.id, action: "business.registered", entity: "business", entityId: b.id, meta: { ownerId: user.id } } });
@@ -106,6 +121,34 @@ class AuthService {
     });
     if (!u || !(await bcrypt.compare(d.password, u.passwordHash)))
       throw new UnauthorizedException("Wrong phone/email or password");
+    await this.db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${u.id + ":first-login"}))`;
+      const prior = await tx.auditLog.findFirst({
+        where: { businessId: u.businessId, userId: u.id, action: "staff.first_login" },
+        select: { id: true },
+      });
+      if (prior) return;
+      const audit = await tx.auditLog.create({
+        data: {
+          businessId: u.businessId,
+          userId: u.id,
+          action: "staff.first_login",
+          entity: "user",
+          entityId: u.id,
+          meta: { role: u.role },
+        },
+      });
+      if (u.role !== "OWNER") {
+        await enqueuePushEvent(tx, {
+          businessId: u.businessId,
+          eventKey: `security:${audit.id}`,
+          kind: "security_alert",
+          title: "New staff login",
+          body: `${u.fullName} signed in for the first time.`,
+          data: { staffId: u.id, path: "/staff" },
+        });
+      }
+    });
     return this.tokens(u);
   }
   async refresh(token: string) {
