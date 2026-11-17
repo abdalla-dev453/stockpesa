@@ -4,12 +4,14 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 import '../core/api.dart';
 import '../core/theme.dart';
+import '../app/theme_provider.dart';
 import '../features/sales/data/receipt_service.dart';
 
 String _newRequestKey() => List.generate(
@@ -1159,6 +1161,48 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     if (ok == true) load();
   }
 
+  Future<void> edit(Map category) async {
+    final name = TextEditingController(text: category['name']?.toString());
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Rename category'),
+        content: TextField(
+          controller: name,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(labelText: 'Category name'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(c),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              if (name.text.trim().isEmpty) return;
+              try {
+                await dio.patch(
+                  '/categories/${category['id']}',
+                  data: {'name': name.text.trim()},
+                );
+                if (c.mounted) Navigator.pop(c, true);
+              } catch (e) {
+                if (c.mounted)
+                  ScaffoldMessenger.of(
+                    c,
+                  ).showSnackBar(SnackBar(content: Text(apiError(e))));
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    name.dispose();
+    if (ok == true) load();
+  }
+
   Future<void> remove(Map category) async {
     final accepted = await showDialog<bool>(
       context: context,
@@ -1210,10 +1254,26 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                   ),
                   title: Text(c['name'] ?? ''),
                   subtitle: Text('${c['_count']?['products'] ?? 0} products'),
-                  trailing: IconButton(
-                    tooltip: 'Delete category',
-                    onPressed: () => remove(c),
-                    icon: const Icon(Icons.delete_outline),
+                  trailing: PopupMenuButton<String>(
+                    tooltip: 'Category actions',
+                    onSelected: (value) =>
+                        value == 'edit' ? edit(c) : remove(c),
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(
+                        value: 'edit',
+                        child: ListTile(
+                          leading: Icon(Icons.edit_outlined),
+                          title: Text('Rename'),
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: 'delete',
+                        child: ListTile(
+                          leading: Icon(Icons.delete_outline),
+                          title: Text('Delete'),
+                        ),
+                      ),
+                    ],
                   ),
                 );
               },
@@ -1771,13 +1831,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
   );
 }
 
-class BusinessSettingsScreen extends StatefulWidget {
+class BusinessSettingsScreen extends ConsumerStatefulWidget {
   const BusinessSettingsScreen({super.key});
   @override
-  State<BusinessSettingsScreen> createState() => _BusinessSettingsScreenState();
+  ConsumerState<BusinessSettingsScreen> createState() =>
+      _BusinessSettingsScreenState();
 }
 
-class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
+class _BusinessSettingsScreenState
+    extends ConsumerState<BusinessSettingsScreen> {
   final fields = {
     for (final k in [
       'name',
@@ -1832,6 +1894,64 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
         : ListView(
             padding: const EdgeInsets.all(18),
             children: [
+              Text(
+                'Appearance',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              SegmentedButton<ThemeMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: ThemeMode.system,
+                    label: Text('System'),
+                    icon: Icon(Icons.settings_brightness_outlined),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.light,
+                    label: Text('Light'),
+                    icon: Icon(Icons.light_mode_outlined),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.dark,
+                    label: Text('Dark'),
+                    icon: Icon(Icons.dark_mode_outlined),
+                  ),
+                ],
+                selected: {ref.watch(themeModeProvider)},
+                onSelectionChanged: (selection) => ref
+                    .read(themeModeProvider.notifier)
+                    .setMode(selection.first),
+              ),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.privacy_tip_outlined),
+                  title: const Text('Privacy policy'),
+                  subtitle: const Text('Template · version 1.0'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => context.push('/privacy'),
+                ),
+              ),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.description_outlined),
+                  title: const Text('Terms & conditions'),
+                  subtitle: const Text('Template · version 1.0'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => context.push('/terms'),
+                ),
+              ),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.notifications_active_outlined),
+                  title: const Text('Notification preferences'),
+                  subtitle: const Text(
+                    'Choose which business alerts you receive',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => context.push('/notification-settings'),
+                ),
+              ),
+              const SizedBox(height: 20),
               for (final e in fields.entries)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),

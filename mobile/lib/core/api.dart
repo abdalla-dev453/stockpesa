@@ -112,3 +112,8 @@ Future<bool> hasCompletedOnboarding() async =>
 
 Future<void> completeOnboarding() =>
     _store.write(key: 'onboarding', value: 'true');
+
+Future<String?> readLocalPreference(String key) => _store.read(key: 'pref_$key');
+
+Future<void> writeLocalPreference(String key, String value) =>
+    _store.write(key: 'pref_$key', value: value);

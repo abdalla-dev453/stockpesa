@@ -13,6 +13,9 @@ import '../screens/detail_screens.dart';
 import '../screens/more_screen.dart' show AlertsScreen;
 import '../screens/products_screen.dart';
 import '../screens/receipt_screen.dart';
+import '../screens/legal_screen.dart';
+import '../screens/market_insights_screen.dart';
+import '../screens/notification_preferences_screen.dart';
 import '../screens/sell_screen.dart';
 import '../screens/stock_screen.dart';
 import 'shell.dart';
@@ -26,13 +29,7 @@ final routerProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) {
       final session = ref.read(sessionProvider);
       final path = state.matchedLocation;
-      const public = {
-        '/splash',
-        '/onboarding',
-        '/login',
-        '/register',
-        '/forgot-password',
-      };
+      const authRoutes = {'/login', '/register', '/forgot-password'};
       if (session.status == SessionStatus.loading) {
         return path == '/splash' ? null : '/splash';
       }
@@ -41,7 +38,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
       if (!session.onboardingComplete && path == '/onboarding') return null;
       if (session.status == SessionStatus.signedOut) {
-        return public.contains(path) ? null : '/login';
+        return authRoutes.contains(path) ? null : '/login';
       }
       if (path == '/onboarding' ||
           path == '/splash' ||
@@ -184,8 +181,24 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(path: '/reports', builder: (_, __) => const ReportsScreen()),
           GoRoute(
+            path: '/market-insights',
+            builder: (_, __) => const MarketInsightsScreen(),
+          ),
+          GoRoute(
+            path: '/notification-settings',
+            builder: (_, __) => const NotificationPreferencesScreen(),
+          ),
+          GoRoute(
             path: '/settings',
             builder: (_, __) => const BusinessSettingsScreen(),
+          ),
+          GoRoute(
+            path: '/privacy',
+            builder: (_, __) => const LegalScreen(privacy: true),
+          ),
+          GoRoute(
+            path: '/terms',
+            builder: (_, __) => const LegalScreen(privacy: false),
           ),
           GoRoute(path: '/staff', builder: (_, __) => const StaffScreen()),
           GoRoute(path: '/more', builder: (_, __) => const MoreHubScreen()),
@@ -213,14 +226,11 @@ class SplashPage extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Image(
-            image: AssetImage('assets/branding/stockpesa-icon.png'),
-            width: 64,
-            height: 64,
-          ),
-          SizedBox(height: 14),
-          Text(
-            'StockPesa',
-            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
+            image: AssetImage('assets/branding/stockpesa-wordmark.png'),
+            width: 210,
+            height: 48,
+            fit: BoxFit.contain,
+            semanticLabel: 'StockPesa',
           ),
           SizedBox(height: 24),
           CircularProgressIndicator(),
@@ -262,8 +272,13 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
     super.dispose();
   }
 
-  Future<void> finish() async =>
-      ref.read(sessionProvider.notifier).finishOnboarding();
+  Future<void> finish() async {
+    await ref.read(sessionProvider.notifier).finishOnboarding();
+    if (mounted) {
+      context.go('/login');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -284,11 +299,20 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
                   itemBuilder: (_, i) => Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
-                        slides[i].$1,
-                        size: 94,
-                        color: const Color(0xFF0B7A4B),
-                      ),
+                      if (i == 0)
+                        Image.asset(
+                          'assets/branding/onboarding-stock.png',
+                          width: 240,
+                          height: 180,
+                          fit: BoxFit.contain,
+                          semanticLabel: 'Retail shelves and inventory box',
+                        )
+                      else
+                        Icon(
+                          slides[i].$1,
+                          size: 94,
+                          color: const Color(0xFF0B7A4B),
+                        ),
                       const SizedBox(height: 32),
                       Text(
                         slides[i].$2,
