@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../core/api.dart';
 import '../core/theme.dart';
 import '../core/validation.dart';
+import 'legal_screen.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({
@@ -63,6 +64,8 @@ class _AuthScreenState extends State<AuthScreen> {
             'email': identifier.text.trim(),
             'password': password.text,
             'location': location.text.trim(),
+            'acceptedTerms': acceptedTerms,
+            'termsVersion': '1.0',
           },
         );
         await saveTokens(Map<String, dynamic>.from(response.data as Map));
@@ -219,6 +222,29 @@ class _AuthScreenState extends State<AuthScreen> {
                         style: TextStyle(fontSize: 13),
                       ),
                       controlAffinity: ListTileControlAffinity.leading,
+                    ),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const LegalScreen(privacy: true),
+                            ),
+                          ),
+                          child: const Text('Read privacy policy'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const LegalScreen(privacy: false),
+                            ),
+                          ),
+                          child: const Text('Read terms'),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 8),
                   ] else if (widget.onForgotPassword != null)
