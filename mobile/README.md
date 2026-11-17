@@ -19,6 +19,12 @@ The app defaults to the Android emulator API URL. Override it with `--dart-defin
 Android permits cleartext HTTP only in the debug manifest for local API testing; release builds do not enable it.
 `.env.example` documents the development value; Flutter does not load that file automatically.
 
+## Push notifications
+
+Firebase Messaging is optional until Firebase values are configured. Initialize a Firebase Android/iOS app, enable Cloud Messaging, and build with `FIREBASE_PROJECT_ID`, `FIREBASE_MESSAGING_SENDER_ID`, `FIREBASE_API_KEY`, and the matching `FIREBASE_ANDROID_APP_ID` or `FIREBASE_IOS_APP_ID` dart-defines. iOS also needs `FIREBASE_IOS_BUNDLE_ID`, the Push Notifications capability, and an APNs key configured in Firebase. Never put service-account credentials in the mobile build; the API receives `FIREBASE_SERVICE_ACCOUNT_JSON` from a deployment secret manager.
+
+The app asks notification permission from Settings → Notification preferences, registers authorized tokens with the authenticated API, handles foreground messages, routes notification taps, and revokes the token on sign out. The API outbox sends low/out-of-stock transition messages to opted-in business users and deactivates invalid tokens. Other event types can be controlled in preferences but require their event producers before delivery is active.
+
 ## Structure
 
 ```text
@@ -53,9 +59,9 @@ Repositories keep endpoint calls out of new presentation code. The legacy screen
 | `/customers`, `/customers/:customerId` | Search/edit customers, debt filter, unpaid sales, recent purchases, payments, create a sale for the customer |
 | `/sales`, `/sales/:saleId/receipt` | Sales history, return flow, receipt preview, PDF share/download, text summary |
 | `/categories` | Product categories |
-| `/alerts`, `/reports`, `/settings`, `/staff`, `/more` | Alerts, reports, business profile, roles, management links |
+| `/alerts`, `/reports`, `/market-insights`, `/settings`, `/notification-settings`, `/staff`, `/privacy`, `/terms`, `/more` | Business alerts/insights, preferences, legal templates, profile, roles and management links |
 
-On screens narrower than 600 logical pixels, navigation uses a bottom bar. Wider layouts use a navigation rail. The system theme controls light and dark appearance.
+On screens narrower than 600 logical pixels, navigation uses a bottom bar. Wider layouts use a navigation rail. Users can follow system appearance or select light/dark mode in settings.
 
 ## Screen descriptions
 
@@ -67,7 +73,8 @@ On screens narrower than 600 logical pixels, navigation uses a bottom bar. Wider
 - **Sales history:** transaction actions include receipt, sharing, and a quantity-limited return with explicit restock choice and recorded refund/balance summary.
 - **Inventory and alerts:** stock intake, adjustment, movement history, counts, low/out-of-stock filters, read state, and product navigation.
 - **Reports:** role-filtered live business figures, sales/payment/profit summary, customer debt, stock value and warnings, recent stock movements, and top products.
-- **Staff/settings:** owner-managed team roles and deactivation; editable business profile and receipt footer.
+- **Market insights:** tenant-scoped 7/30-day sales patterns, best/slow movers, stock health and explicitly estimated run-out timing.
+- **Staff/settings:** owner-managed team roles and deactivation; editable business profile, receipt footer, theme, push preferences and legal templates.
 
 ## API coverage and known server limits
 

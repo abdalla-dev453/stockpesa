@@ -230,6 +230,12 @@ Comprehensive guides, specifications, and collateral are located in `docs/` and 
 | [QA Audit Report](docs/qa-audit-report.md)                     | Complete baseline audit findings, security observations, and follow-up status |
 | [Five-Minute Demo Script](docs/demo-script.md)                 | Step-by-step walkthrough script for live merchant demonstrations              |
 | [Deployment & Release Checklist](docs/deployment-checklist.md) | Production hardening, release engineering, and Google Play listing draft      |
+| [V1.1 Quality & Trust Audit](docs/v1.1-quality-trust-audit.md) | Current baseline, priority order, measurement targets, and notification architecture |
+| [Privacy Policy Template](docs/privacy-policy-template.md) | Plain-English privacy draft requiring operator completion and Kenyan legal review |
+| [Terms Template](docs/terms-and-conditions-template.md) | Service terms draft requiring operator completion and Kenyan legal review |
+| [V1.1 Manual QA](docs/v1.1-manual-qa.md) | Category, theme, consent, regression, push and release-gate checklist |
+| [V1.1 Release Notes](docs/v1.1-release-notes.md) | Implemented slice and remaining environment-dependent release work |
+| [V1.1 Security Checklist](docs/v1.1-security-compliance-checklist.md) | Deployment security checks and Kenya privacy review items |
 | [Investor One-Pager](docs/investor-one-pager.md)               | Market opportunity, problem/solution overview, and commercial model           |
 | [Mobile Client Guide](mobile/README.md)                        | Flutter application architecture, screen routing map, and mobile test guide   |
 
