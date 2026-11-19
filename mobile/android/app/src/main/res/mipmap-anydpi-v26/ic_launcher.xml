@@ -1,0 +1,5 @@
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/stockpesa_launcher_background" />
+    <foreground android:drawable="@drawable/stockpesa_adaptive_foreground" />
+    <monochrome android:drawable="@drawable/stockpesa_monochrome" />
+</adaptive-icon>

@@ -52,7 +52,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       .maybeWhen(
         data: (results) =>
             results.any((value) => value != ConnectivityResult.none),
-        orElse: () => false,
+        orElse: () => true,
       );
 
   double get _subtotal =>
@@ -151,8 +151,9 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         dio.get(
           '/products',
           queryParameters: {
-            'search': _search.text.trim().isEmpty ? null : _search.text.trim(),
-            'categoryId': _selectedCategory,
+            if (_search.text.trim().isNotEmpty) 'search': _search.text.trim(),
+            if (_selectedCategory != null && _selectedCategory!.isNotEmpty)
+              'categoryId': _selectedCategory,
             'stockStatus': 'ALL',
             'page': 1,
             'limit': 30,
@@ -261,6 +262,97 @@ class _SellScreenState extends ConsumerState<SellScreen> {
   }
 
   Future<void> _add(Map<String, dynamic> product) async {
+    if (product['variantId'] == null) {
+      final existing = _cart[product['id'].toString()];
+      if (existing != null) {
+        await _setQuantity(existing, _qty(existing) + 1);
+        return;
+      }
+      try {
+        final variants = ((await dio.get('/products/${product['id']}/variants')).data as List)
+            .where((value) => (value as Map)['active'] != false)
+            .toList();
+        if (variants.isNotEmpty && mounted) {
+          final selected = await showModalBottomSheet<Map<String, dynamic>>(
+            context: context,
+            showDragHandle: true,
+            builder: (context) => SafeArea(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  const ListTile(title: Text('Choose size or type')),
+                  ...variants.map((value) {
+                    final row = Map<String, dynamic>.from(value as Map);
+                    return ListTile(
+                      title: Text(row['name']?.toString() ?? 'Variant'),
+                      subtitle: Text(
+                        '${row['quantity'] ?? 0} available · ${kes(numberValue(row['sellingPrice']))}',
+                      ),
+                      onTap: () => Navigator.pop(context, {
+                        ...row,
+                        'id': row['id'],
+                        'variantId': row['id'],
+                        'parentProductId': product['id'],
+                        'name': '${product['name']} · ${row['name']}',
+                      }),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          );
+          if (selected == null) return;
+          product = selected;
+        }
+      } catch (error) {
+        _message(apiError(error));
+        return;
+      }
+    }
+    if (product['variantId'] == null) {
+      try {
+        final baseUnit = product['unit'].toString();
+        final rows = (await dio.get('/unit-conversions', queryParameters: {'productId': product['id']})).data as List;
+        final choices = <Map<String, dynamic>>[
+          {'unit': baseUnit, 'factor': 1.0},
+        ];
+        for (final value in rows) {
+          final row = value as Map;
+          if (row['productId'] != null && row['productId']?.toString() != product['id'].toString()) continue;
+          final multiplier = numberValue(row['multiplier']).toDouble();
+          if (row['toUnit'] == baseUnit) choices.add({'unit': row['fromUnit'].toString(), 'factor': multiplier});
+          if (row['fromUnit'] == baseUnit && multiplier != 0) choices.add({'unit': row['toUnit'].toString(), 'factor': 1 / multiplier});
+        }
+        if (choices.length > 1 && mounted) {
+          final choice = await showModalBottomSheet<Map<String, dynamic>>(
+            context: context,
+            showDragHandle: true,
+            builder: (context) => SafeArea(child: ListView(shrinkWrap: true, children: [
+              const ListTile(title: Text('Choose selling unit')),
+              for (final option in choices)
+                ListTile(
+                  title: Text(option['unit'].toString()),
+                  subtitle: Text('${kes(numberValue(product['sellingPrice']) * (option['factor'] as double))} each'),
+                  onTap: () => Navigator.pop(context, option),
+                ),
+            ])),
+          );
+          if (choice == null) return;
+          final factor = choice['factor'] as double;
+          product = {
+            ...product,
+            'unit': choice['unit'],
+            '_saleUnit': choice['unit'],
+            '_unitFactor': factor,
+            'sellingPrice': numberValue(product['sellingPrice']) * factor,
+            'quantity': numberValue(product['quantity']) / factor,
+          };
+        }
+      } catch (error) {
+        _message(apiError(error));
+        return;
+      }
+    }
     final id = product['id'].toString();
     await _setQuantity(product, (_cart[id] == null ? 0 : _qty(_cart[id]!)) + 1);
   }
@@ -564,7 +656,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
                     'phone': phone.text.trim().isEmpty
                         ? null
                         : phone.text.trim(),
-                    if (creditLimit != null) 'creditLimit': creditLimit,
+                    'creditLimit': ?creditLimit,
                   },
                 );
                 if (context.mounted) {
@@ -676,7 +768,16 @@ class _SellScreenState extends ConsumerState<SellScreen> {
 
     final request = <String, dynamic>{
       'items': _cart.values
-          .map((item) => {'productId': item['id'], 'quantity': _qty(item)})
+          .map(
+            (item) => {
+              if (item['variantId'] != null)
+                'variantId': item['variantId']
+              else
+                'productId': item['id'],
+              if (item['_saleUnit'] != null) 'unit': item['_saleUnit'],
+              'quantity': _qty(item),
+            },
+          )
           .toList(),
       'method': _method,
       'amountPaid': paid,
@@ -732,7 +833,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         .maybeWhen(
           data: (results) =>
               results.any((value) => value != ConnectivityResult.none),
-          orElse: () => false,
+          orElse: () => true,
         );
     return _loading
         ? const Center(child: CircularProgressIndicator())
@@ -861,7 +962,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
                 child: ListView.separated(
                   padding: const EdgeInsets.fromLTRB(14, 6, 14, 12),
                   itemCount: _products.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 6),
+                  separatorBuilder: (_, _) => const SizedBox(height: 6),
                   itemBuilder: (context, index) {
                     final product = _products[index];
                     final quantity = _available(product);

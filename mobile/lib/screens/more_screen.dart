@@ -63,8 +63,15 @@ class MoreScreen extends StatelessWidget {
       ),
       _item(
         context,
+        'Market insights',
+        'Sales and stock patterns from your business data',
+        Icons.insights_outlined,
+        '/market-insights',
+      ),
+      _item(
+        context,
         'Alerts',
-        'Low and out of stock notices',
+        'Stock, customer and account notifications',
         Icons.notifications_active_outlined,
         '/alerts',
       ),
@@ -230,7 +237,7 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
                           Center(
                             child: Text(
                               filter == 'ALL'
-                                  ? 'Great news—no low-stock alerts.'
+                                  ? 'No business alerts yet.'
                                   : 'No alerts match this filter.',
                             ),
                           ),
@@ -239,7 +246,7 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
                     }
                     return ListView.separated(
                       itemCount: visible.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      separatorBuilder: (_, _) => const Divider(height: 1),
                       itemBuilder: (context, i) {
                         final a = visible[i] as Map, p = a['product'] as Map?;
                         final isRead = a['read'] == true;
@@ -247,11 +254,15 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
                           leading: Icon(
                             a['kind'] == 'out_of_stock'
                                 ? Icons.remove_shopping_cart_outlined
-                                : Icons.warning_amber_rounded,
+                                : a['critical'] == true
+                                ? Icons.security_outlined
+                                : a['kind'] == 'low_stock'
+                                ? Icons.warning_amber_rounded
+                                : Icons.notifications_active_outlined,
                             color: isRead ? C.muted : C.warn,
                           ),
                           title: Text(
-                            p?['name'] ?? a['kind'] ?? 'Stock alert',
+                            a['title'] ?? p?['name'] ?? a['kind'] ?? 'Business alert',
                             style: TextStyle(
                               fontWeight: isRead
                                   ? FontWeight.normal
@@ -259,7 +270,10 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
                             ),
                           ),
                           subtitle: Text(
-                            '${a['kind']}  •  ${a['createdAt'] ?? ''}',
+                            [a['body']?.toString(), a['createdAt']?.toString()]
+                                .whereType<String>()
+                                .where((text) => text.isNotEmpty)
+                                .join('  •  '),
                           ),
                           trailing: isRead
                               ? null
@@ -275,7 +289,11 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
                                 await load();
                               }
                               if (!context.mounted) return;
-                              if (p?['id'] != null) {
+                              final data = a['data'];
+                              final route = data is Map ? data['path']?.toString() : null;
+                              if (route != null && (route.startsWith('/products/') || route.startsWith('/customers/') || route == '/reports' || route == '/staff' || route == '/market-insights')) {
+                                context.go(route);
+                              } else if (p?['id'] != null) {
                                 context.go('/products/${p!['id']}');
                               } else {
                                 context.go('/stock');

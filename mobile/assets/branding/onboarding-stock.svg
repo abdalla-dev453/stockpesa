@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 180" role="img" aria-labelledby="title desc">
+  <title id="title">Track your stock</title><desc id="desc">Retail shelves, a stock box and a rising sales arrow.</desc>
+  <rect x="28" y="34" width="184" height="112" rx="14" fill="#E7F1EA"/><path fill="#065F3A" d="M44 68h152v9H44zm0 43h152v9H44z"/><path fill="#0B7A4B" d="M54 47h28v21H54zm42 0h34v21H96zm47 0h38v21h-38zM53 79h40v32H53zm54 0h31v32h-31zm48 0h31v32h-31z"/><path fill="#F5A524" d="m69 129 30-21 23 12 47-38 10 11-55 46-24-12-24 20z"/><path fill="#FF6B35" d="M165 82h17v17h-17z"/>
+</svg>

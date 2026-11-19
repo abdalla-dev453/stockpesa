@@ -12,6 +12,12 @@ import '../core/widgets/app_states.dart';
 import '../features/products/data/products_repository.dart';
 import '../features/stock/data/stock_repository.dart';
 
+String? _productImageUrl(Object? value) {
+  final url = value?.toString();
+  if (url == null || url.isEmpty) return null;
+  return url.startsWith('https://') ? url : '$apiBase$url';
+}
+
 class ProductsScreen extends StatefulWidget {
   const ProductsScreen({super.key, this.initialAction, this.initialBarcode});
   final String? initialAction;
@@ -83,10 +89,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
           '/products',
           queryParameters: {
             'page': page,
-            'search': search.text.trim().isEmpty ? null : search.text.trim(),
+            if (search.text.trim().isNotEmpty) 'search': search.text.trim(),
             'limit': 20,
-            'stockStatus': status,
-            'categoryId': categoryId,
+            if (status.isNotEmpty) 'stockStatus': status,
+            if (categoryId != null && categoryId!.isNotEmpty)
+              'categoryId': categoryId,
             'sortBy': sortBy == 'quantity'
                 ? 'stockQuantity'
                 : sortBy == 'price'
@@ -120,6 +127,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
         barcode = TextEditingController(text: initialBarcode ?? '');
     String unit = 'piece';
     String? categoryId;
+    PlatformFile? productPhoto;
     final ok = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -189,10 +197,15 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       const [
                             'piece',
                             'kg',
+                            'gram',
                             'litre',
+                            'millilitre',
                             'packet',
                             'carton',
                             'bale',
+                            'dozen',
+                            'bottle',
+                            'pack',
                             'other',
                           ]
                           .map(
@@ -231,6 +244,15 @@ class _ProductsScreenState extends State<ProductsScreen> {
                     labelText: 'Low stock threshold',
                   ),
                 ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final result = await FilePicker.pickFiles(type: FileType.image);
+                    if (result.isNotEmpty) setSheet(() => productPhoto = result.single);
+                  },
+                  icon: const Icon(Icons.add_a_photo_outlined),
+                  label: Text(productPhoto == null ? 'Choose product photo' : 'Photo: ${productPhoto!.name}'),
+                ),
                 const SizedBox(height: 16),
                 FilledButton(
                   onPressed: () async {
@@ -250,7 +272,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       return;
                     }
                     try {
-                      await dio.post(
+                      final created = await dio.post(
                         '/products',
                         data: {
                           'name': name.text.trim(),
@@ -272,6 +294,16 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       );
                       if (context.mounted) {
                         Navigator.pop(context, true);
+                      }
+                      if (productPhoto != null) {
+                        try {
+                          final bytes = await productPhoto!.readAsBytes();
+                          await dio.post('/products/${created.data['id']}/images/upload', data: FormData.fromMap({
+                            'file': MultipartFile.fromBytes(bytes, filename: productPhoto!.name),
+                          }));
+                        } catch (e) {
+                          if (mounted) _message('Product created, but its photo could not be uploaded: ${apiError(e)}');
+                        }
                       }
                     } catch (e) {
                       if (context.mounted) {
@@ -698,15 +730,23 @@ class _ProductsScreenState extends State<ProductsScreen> {
                 onRefresh: load,
                 child: rows.isEmpty
                     ? ListView(
-                        children: const [
-                          SizedBox(height: 120),
-                          Center(child: Text('No products found')),
+                        children: [
+                          const SizedBox(height: 48),
+                          Center(
+                            child: Image.asset(
+                              'assets/branding/empty-products.png',
+                              width: 240,
+                              height: 180,
+                              semanticLabel: 'Illustration of a stock box',
+                            ),
+                          ),
+                          const Center(child: Text('No products found')),
                         ],
                       )
                     : ListView.separated(
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
                         itemCount: rows.length + (totalPages > 1 ? 1 : 0),
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        separatorBuilder: (_, _) => const SizedBox(height: 8),
                         itemBuilder: (context, i) {
                           if (i == rows.length) {
                             return Row(
@@ -749,10 +789,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
                             child: ListTile(
                               leading: CircleAvatar(
                                 backgroundColor: color.withValues(alpha: .12),
-                                child: Icon(
-                                  Icons.inventory_2_outlined,
-                                  color: color,
-                                ),
+                                backgroundImage: _productImageUrl(p['imageUrl']) == null ? null : NetworkImage(_productImageUrl(p['imageUrl'])!),
+                                child: _productImageUrl(p['imageUrl']) == null ? Icon(Icons.inventory_2_outlined, color: color) : null,
                               ),
                               title: Text(
                                 p['name'] ?? 'Product',
@@ -830,7 +868,576 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
   Future<List<dynamic>> _load() => Future.wait([
     ref.read(productsRepositoryProvider).get(widget.productId),
     ref.read(stockRepositoryProvider).movements(),
+    dio.get('/products/${widget.productId}/variants').then((r) => r.data),
+    dio.get('/products/${widget.productId}/images').then((r) => r.data),
+    dio.get('/products/${widget.productId}/bundle').then((r) => r.data),
+    dio.get('/products/${widget.productId}/price-history').then((r) => r.data),
   ]);
+
+  Future<void> _addVariant() async {
+    final name = TextEditingController();
+    final sku = TextEditingController();
+    final barcode = TextEditingController();
+    final cost = TextEditingController();
+    final price = TextEditingController();
+    var unit = 'piece';
+    final body = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add size or type'),
+        content: StatefulBuilder(
+          builder: (context, setDialog) => SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: name,
+                  decoration: const InputDecoration(
+                    labelText: 'Variant name (for example 500ml)',
+                  ),
+                ),
+                TextField(
+                  controller: sku,
+                  decoration: const InputDecoration(
+                    labelText: 'SKU (optional)',
+                  ),
+                ),
+                TextField(
+                  controller: barcode,
+                  decoration: const InputDecoration(
+                    labelText: 'Barcode (optional)',
+                  ),
+                ),
+                TextField(
+                  controller: cost,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Buying price'),
+                ),
+                TextField(
+                  controller: price,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Selling price'),
+                ),
+                DropdownButtonFormField<String>(
+                  initialValue: unit,
+                  decoration: const InputDecoration(labelText: 'Unit'),
+                  items:
+                      const [
+                            'piece',
+                            'kg',
+                            'gram',
+                            'litre',
+                            'millilitre',
+                            'packet',
+                            'carton',
+                            'bale',
+                            'dozen',
+                            'bottle',
+                            'pack',
+                            'other',
+                          ]
+                          .map(
+                            (v) => DropdownMenuItem(value: v, child: Text(v)),
+                          )
+                          .toList(),
+                  onChanged: (v) => setDialog(() => unit = v ?? 'piece'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final buying = double.tryParse(cost.text),
+                  selling = double.tryParse(price.text);
+              if (name.text.trim().isEmpty ||
+                  buying == null ||
+                  selling == null ||
+                  buying < 0 ||
+                  selling < 0) {
+                return;
+              }
+              Navigator.pop(context, {
+                'name': name.text.trim(),
+                'attributes': {'option': name.text.trim()},
+                'sku': sku.text.trim().isEmpty ? null : sku.text.trim(),
+                'barcode': barcode.text.trim().isEmpty
+                    ? null
+                    : barcode.text.trim(),
+                'unit': unit,
+                'buyingPrice': buying,
+                'sellingPrice': selling,
+              });
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (body == null || !mounted) return;
+    try {
+      await dio.post('/products/${widget.productId}/variants', data: body);
+      setState(() => data = _load());
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
+    }
+  }
+
+  Future<void> _receiveVariantStock(Map<String, dynamic> variant) async {
+    final quantity = TextEditingController();
+    final cost = TextEditingController(
+      text: variant['buyingPrice']?.toString() ?? '0',
+    );
+    final values = await showDialog<List<double>>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Receive ${variant['name']}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: quantity,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Quantity received'),
+            ),
+            TextField(
+              controller: cost,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Buying price per unit',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final q = double.tryParse(quantity.text),
+                  c = double.tryParse(cost.text);
+              if (q == null || c == null || q <= 0 || c < 0) return;
+              Navigator.pop(context, [q, c]);
+            },
+            child: const Text('Receive stock'),
+          ),
+        ],
+      ),
+    );
+    if (values == null || !mounted) return;
+    try {
+      await dio.post(
+        '/product-variants/${variant['id']}/stock',
+        data: {'quantity': values[0], 'unitCost': values[1]},
+        options: Options(
+          headers: {
+            'Idempotency-Key':
+                'variant-intake-${variant['id']}-${DateTime.now().microsecondsSinceEpoch}',
+          },
+        ),
+      );
+      setState(() => data = _load());
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
+    }
+  }
+
+  Future<void> _addImage() async {
+    final url = TextEditingController();
+    final value = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add product image'),
+        content: TextField(
+          controller: url,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(labelText: 'Image URL'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (url.text.trim().startsWith('https://')) {
+                Navigator.pop(context, url.text.trim());
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (value == null || !mounted) return;
+    try {
+      await dio.post(
+        '/products/${widget.productId}/images',
+        data: {'url': value},
+      );
+      setState(() => data = _load());
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
+    }
+  }
+
+  Future<void> _uploadImage() async {
+    final result = await FilePicker.pickFiles(type: FileType.image);
+    if (result.isEmpty) return;
+    final file = result.single;
+    try {
+      final bytes = await file.readAsBytes();
+      await dio.post('/products/${widget.productId}/images/upload', data: FormData.fromMap({
+        'file': MultipartFile.fromBytes(bytes, filename: file.name),
+      }));
+      if (mounted) setState(() => data = _load());
+    } catch (error) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(apiError(error))));
+    }
+  }
+
+  Future<void> _editTags() async {
+    final current = Map<String, dynamic>.from(
+      (await dio.get('/products/${widget.productId}')).data as Map,
+    );
+    if (!mounted) return;
+    final tags = TextEditingController(
+      text:
+          ((current['productTags'] as List? ?? [])
+                  .map((row) => row['tag']?['name'])
+                  .whereType<String>())
+              .join(', '),
+    );
+    final value = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Product tags'),
+        content: TextField(
+          controller: tags,
+          decoration: const InputDecoration(
+            labelText: 'Separate tags with commas',
+            hintText: 'Fast-moving, Promotion',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, tags.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (value == null || !mounted) return;
+    try {
+      await dio.put(
+        '/products/${widget.productId}/tags',
+        data: {
+          'tags': value
+              .split(',')
+              .map((tag) => tag.trim())
+              .where((tag) => tag.isNotEmpty)
+              .toList(),
+        },
+      );
+      setState(() => data = _load());
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
+    }
+  }
+
+  Future<void> _setPromotion(Map<String, dynamic> product) async {
+    final price = TextEditingController(
+      text: product['promotionalPrice']?.toString() ?? '',
+    );
+    final value = await showDialog<double?>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Promotion price'),
+        content: TextField(
+          controller: price,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(
+            labelText: 'Price (leave blank to remove)',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (price.text.trim().isEmpty) {
+                Navigator.pop(context, -1);
+                return;
+              }
+              final parsed = double.tryParse(price.text);
+              if (parsed != null && parsed >= 0) Navigator.pop(context, parsed);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (value == null || !mounted) return;
+    try {
+      await dio.patch(
+        '/products/${widget.productId}',
+        data: {'promotionalPrice': value < 0 ? null : value},
+      );
+      setState(() => data = _load());
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
+    }
+  }
+
+  Future<void> _addConversion(String productUnit) async {
+    var from = productUnit, to = productUnit == 'piece' ? 'dozen' : 'piece';
+    final multiplier = TextEditingController(text: '1');
+    const units = [
+      'piece',
+      'kg',
+      'gram',
+      'litre',
+      'millilitre',
+      'packet',
+      'carton',
+      'bale',
+      'dozen',
+      'bottle',
+      'pack',
+      'other',
+    ];
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Unit conversion'),
+        content: StatefulBuilder(
+          builder: (context, setDialog) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: from,
+                decoration: const InputDecoration(labelText: 'From'),
+                items: units
+                    .map(
+                      (unit) =>
+                          DropdownMenuItem(value: unit, child: Text(unit)),
+                    )
+                    .toList(),
+                onChanged: (value) => setDialog(() => from = value ?? from),
+              ),
+              DropdownButtonFormField<String>(
+                initialValue: to,
+                decoration: const InputDecoration(labelText: 'To'),
+                items: units
+                    .map(
+                      (unit) =>
+                          DropdownMenuItem(value: unit, child: Text(unit)),
+                    )
+                    .toList(),
+                onChanged: (value) => setDialog(() => to = value ?? to),
+              ),
+              TextField(
+                controller: multiplier,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: '1 From unit equals how many To units?',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final parsed = double.tryParse(multiplier.text);
+              if (parsed != null && parsed > 0 && from != to) {
+                Navigator.pop(context, {
+                  'productId': widget.productId,
+                  'fromUnit': from,
+                  'toUnit': to,
+                  'multiplier': parsed,
+                });
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result == null || !mounted) return;
+    try {
+      await dio.post('/unit-conversions', data: result);
+      setState(() => data = _load());
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
+    }
+  }
+
+  Future<void> _editBundle() async {
+    try {
+      final dataResponse = await dio.get(
+        '/products',
+        queryParameters: {'page': 1, 'limit': 100},
+      );
+      final products = (dataResponse.data['data'] as List)
+          .where((row) => row['id'] != widget.productId)
+          .toList();
+      if (!mounted) return;
+      final selected = <String, TextEditingController>{};
+      final items = await showModalBottomSheet<List<Map<String, dynamic>>>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setSheet) => SafeArea(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                8,
+                16,
+                MediaQuery.viewInsetsOf(context).bottom + 16,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Choose bundle contents',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                  ),
+                  Flexible(
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: products.map((value) {
+                        final row = Map<String, dynamic>.from(value as Map);
+                        final id = row['id'].toString();
+                        return Row(
+                          children: [
+                            Expanded(
+                              child: CheckboxListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(row['name'].toString()),
+                                value: selected.containsKey(id),
+                                onChanged: (checked) => setSheet(() {
+                                  if (checked == true) {
+                                    selected[id] = TextEditingController(
+                                      text: '1',
+                                    );
+                                  } else {
+                                    selected.remove(id)?.dispose();
+                                  }
+                                }),
+                              ),
+                            ),
+                            if (selected.containsKey(id))
+                              SizedBox(
+                                width: 68,
+                                child: TextField(
+                                  controller: selected[id],
+                                  keyboardType: TextInputType.number,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Qty',
+                                  ),
+                                ),
+                              ),
+                          ],
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Cancel'),
+                      ),
+                      const Spacer(),
+                      FilledButton(
+                        onPressed: () {
+                          final values = selected.entries
+                              .map(
+                                (entry) => {
+                                  'productId': entry.key,
+                                  'quantity':
+                                      double.tryParse(entry.value.text) ?? 0,
+                                },
+                              )
+                              .toList();
+                          if (values.isNotEmpty &&
+                              values.every(
+                                (row) => (row['quantity'] as double) > 0,
+                              )) {
+                            Navigator.pop(context, values);
+                          }
+                        },
+                        child: const Text('Save bundle'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      for (final controller in selected.values) {
+        controller.dispose();
+      }
+      if (items == null || !mounted) return;
+      await dio.put(
+        '/products/${widget.productId}/bundle',
+        data: {'items': items},
+      );
+      setState(() => data = _load());
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) => FutureBuilder<List<dynamic>>(
@@ -858,6 +1465,10 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
       }
       final product = Map<String, dynamic>.from(snapshot.data![0] as Map);
       final allMovements = snapshot.data![1] as List;
+      final variants = snapshot.data![2] as List;
+      final images = snapshot.data![3] as List;
+      final bundle = Map<String, dynamic>.from(snapshot.data![4] as Map);
+      final priceHistory = snapshot.data![5] as List;
       final movements = allMovements
           .where(
             (row) =>
@@ -924,6 +1535,157 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
               ),
             ),
           ),
+          if (variants.isNotEmpty ||
+              product['promotionalPrice'] != null ||
+              product['status'] != null)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Product options',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    if (variants.isNotEmpty)
+                      ...variants.map((value) {
+                        final variant = Map<String, dynamic>.from(value as Map);
+                        final vQuantity = numberValue(variant['quantity']);
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(variant['name']?.toString() ?? 'Variant'),
+                          subtitle: Text(
+                            '${variant['sku'] ?? variant['barcode'] ?? 'No code'} · $vQuantity ${variant['unit']} on hand',
+                          ),
+                          trailing: Text(
+                            kes(numberValue(variant['sellingPrice'])),
+                          ),
+                          onTap: () => _receiveVariantStock(variant),
+                        );
+                      }),
+                    if (variants.isNotEmpty)
+                      const Text('Tap a variant to receive stock.'),
+                    if (product['promotionalPrice'] != null)
+                      Text(
+                        'Promotion: ${kes(numberValue(product['promotionalPrice']))}${product['promotionEndsAt'] == null ? '' : ' · ends ${product['promotionEndsAt']}'}',
+                      ),
+                    Text(
+                      'Status: ${(product['status'] ?? 'ACTIVE').toString().replaceAll('_', ' ').toLowerCase()}',
+                    ),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: _addVariant,
+                          icon: const Icon(Icons.add),
+                          label: const Text('Add size or type'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _addImage,
+                          icon: const Icon(Icons.image_outlined),
+                          label: const Text('Add image URL'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _uploadImage,
+                          icon: const Icon(Icons.add_a_photo_outlined),
+                          label: const Text('Upload photo'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _editTags,
+                          icon: const Icon(Icons.sell_outlined),
+                          label: const Text('Edit tags'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () => _setPromotion(product),
+                          icon: const Icon(Icons.local_offer_outlined),
+                          label: const Text('Set promotion'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () => _addConversion(
+                            product['unit']?.toString() ?? 'piece',
+                          ),
+                          icon: const Icon(Icons.swap_horiz),
+                          label: const Text('Add unit conversion'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _editBundle,
+                          icon: const Icon(Icons.inventory_2_outlined),
+                          label: const Text('Set bundle contents'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (images.isNotEmpty)
+            Card(
+              child: Column(
+                children: images.map((value) {
+                  final image = Map<String, dynamic>.from(value as Map);
+                  return ListTile(
+                    leading: SizedBox(width: 48, height: 48, child: Image.network(
+                      _productImageUrl(image['url'])!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => const Icon(Icons.image_not_supported_outlined),
+                    )),
+                    title: Text(
+                      image['altText']?.toString().isNotEmpty == true
+                          ? image['altText']
+                          : 'Product image',
+                    ),
+                    subtitle: Text(
+                      image['url'].toString(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          if ((bundle['items'] as List? ?? []).isNotEmpty)
+            Card(
+              child: Column(
+                children: [
+                  const ListTile(
+                    title: Text(
+                      'Bundle contents',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  ...((bundle['items'] as List).map((value) {
+                    final item = Map<String, dynamic>.from(value as Map);
+                    return ListTile(
+                      title: Text(
+                        item['component']?['name']?.toString() ?? 'Product',
+                      ),
+                      trailing: Text('× ${item['quantity']}'),
+                    );
+                  })),
+                ],
+              ),
+            ),
+          if (priceHistory.isNotEmpty)
+            Card(
+              child: ExpansionTile(
+                title: const Text('Price changes'),
+                children: priceHistory.take(10).map((value) {
+                  final row = Map<String, dynamic>.from(value as Map);
+                  return ListTile(
+                    title: Text(
+                      '${kes(numberValue(row['oldSellingPrice']))} → ${kes(numberValue(row['sellingPrice']))} selling',
+                    ),
+                    subtitle: Text(
+                      '${row['createdAt'] ?? ''} · buying ${kes(numberValue(row['oldBuyingPrice']))} → ${kes(numberValue(row['buyingPrice']))}',
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
           const Padding(
             padding: EdgeInsets.only(top: 16, bottom: 8),
             child: Text(

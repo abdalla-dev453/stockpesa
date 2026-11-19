@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title desc">
+  <title id="title">StockPesa mark</title>
+  <desc id="desc">Stacked inventory shelf with upward growth arrow and discreet currency cue.</desc>
+  <rect x="20" y="20" width="56" height="56" rx="10" fill="#0B7A4B"/>
+  <rect x="26" y="38" width="44" height="4" rx="2" fill="#F7F8F7"/>
+  <rect x="26" y="54" width="44" height="4" rx="2" fill="#F7F8F7"/>
+  <path fill="none" stroke="#F5A524" stroke-linecap="round" stroke-linejoin="round" stroke-width="6" d="M62 62 74 50 84 62"/>
+  <rect x="73" y="65" width="2" height="6" rx="1" fill="#F5A524"/>
+</svg>

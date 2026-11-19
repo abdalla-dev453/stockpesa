@@ -17,6 +17,7 @@ mobile/.env
 mobile/.env.*
 !mobile/.env.example
 mobile/android/.gradle/
+mobile/android/build/
 mobile/android/local.properties
 mobile/android/key.properties
 mobile/ios/Pods/

@@ -25,6 +25,10 @@ test('API integration: tenant boundary, stock idempotency, sale, and M-Pesa flow
   const { AppModule } = require('../dist/src/app.module.js');
   const { PrismaService } = require('../dist/src/prisma.service.js');
   const app = await NestFactory.create(AppModule, { logger: false });
+  app.getHttpAdapter().getInstance().use((req, _res, next) => {
+    if (req.url === '/api/v1' || req.url.startsWith('/api/v1/')) req.url = req.url.slice(7) || '/';
+    next();
+  });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: true }));
   await app.listen(0, '127.0.0.1');
   const address = app.getHttpServer().address();
@@ -114,6 +118,133 @@ test('API integration: tenant boundary, stock idempotency, sale, and M-Pesa flow
     assert.equal((await call('/stock/intake', { method: 'POST', token: ownerA, key: 'intake-once', body: intake })).status, 201);
     const intakeReplay = await call('/stock/intake', { method: 'POST', token: ownerA, key: 'intake-once', body: intake });
     assert.equal(intakeReplay.status, 201);
+    assert.equal((await call('/api/v1/products', { token: ownerA })).status, 200);
+
+    const convertedProduct = await call('/products', {
+      method: 'POST', token: ownerA,
+      body: { name: 'Conversion Item', sku: 'CONV-ITEM', unit: 'piece', buyingPrice: 80, sellingPrice: 120 },
+    });
+    assert.equal(convertedProduct.status, 201);
+    const cartonRule = await call('/unit-conversions', {
+      method: 'POST', token: ownerA,
+      body: { productId: convertedProduct.data.id, fromUnit: 'carton', toUnit: 'piece', multiplier: 24 },
+    });
+    assert.equal(cartonRule.status, 201);
+    assert.equal((await call('/unit-conversions', { token: ownerB, })).data.length, 0);
+    assert.equal((await call('/unit-conversions', {
+      method: 'POST', token: cashierLogin.data.accessToken,
+      body: { productId: convertedProduct.data.id, fromUnit: 'carton', toUnit: 'piece', multiplier: 24 },
+    })).status, 403);
+    assert.equal((await call('/unit-conversions', {
+      method: 'POST', token: ownerA,
+      body: { productId: convertedProduct.data.id, fromUnit: 'piece', toUnit: 'carton', multiplier: 0.041667 },
+    })).status, 409);
+    const cartonIntake = { productId: convertedProduct.data.id, quantity: 2, unit: 'carton', unitCost: 1920 };
+    assert.equal((await call('/stock/intake', { method: 'POST', token: ownerA, key: 'carton-intake', body: cartonIntake })).status, 201);
+    assert.equal((await call('/stock/intake', { method: 'POST', token: ownerA, key: 'carton-intake', body: cartonIntake })).data.replayed, true);
+    assert.equal((await call('/stock/intake', { method: 'POST', token: ownerA, key: 'carton-intake', body: { ...cartonIntake, quantity: 3 } })).status, 409);
+    const convertedStock = await call(`/products/${convertedProduct.data.id}`, { token: ownerA });
+    assert.equal(Number(convertedStock.data.quantity), 48);
+    assert.equal(Number(convertedStock.data.buyingPrice), 80);
+    const cartonSaleBody = { items: [{ productId: convertedProduct.data.id, quantity: 1, unit: 'carton' }], method: 'CASH', amountPaid: 2880 };
+    const cartonSale = await call('/sales', { method: 'POST', token: ownerA, key: 'carton-sale', body: cartonSaleBody });
+    assert.equal(cartonSale.status, 201);
+    assert.equal(Number(cartonSale.data.items[0].unitPrice), 2880);
+    assert.equal(cartonSale.data.items[0].unit, 'carton');
+    assert.equal(Number(cartonSale.data.items[0].stockQuantity), 24);
+    assert.equal((await call('/sales', { method: 'POST', token: ownerA, key: 'carton-sale', body: cartonSaleBody })).data.id, cartonSale.data.id);
+    assert.equal(Number((await call(`/products/${convertedProduct.data.id}`, { token: ownerA })).data.quantity), 24);
+    const conversionProductReport = await call('/reports/products', { token: ownerA });
+    const conversionProductRow = conversionProductReport.data.find((row) => row.product.id === convertedProduct.data.id);
+    assert.equal(Number(conversionProductRow.quantitySold), 24);
+    assert.equal(conversionProductRow.product.unit, 'piece');
+    assert.equal(Number(conversionProductRow.revenue), 2880);
+    assert.equal((await call(`/products/${convertedProduct.data.id}`, { method: 'PATCH', token: ownerA, body: { status: 'DISCONTINUED' } })).status, 200);
+    assert.equal((await call('/sales', { method: 'POST', token: ownerA, key: 'discontinued-sale', body: cartonSaleBody })).status, 400);
+    assert.equal((await call(`/products/${convertedProduct.data.id}`, { method: 'PATCH', token: ownerA, body: { status: 'ACTIVE' } })).status, 200);
+    const cartonReturn = await call(`/sales/${cartonSale.data.id}/returns`, {
+      method: 'POST', token: ownerA, key: 'carton-return',
+      body: { items: [{ saleItemId: cartonSale.data.items[0].id, quantity: 1 }], reason: 'Conversion test', refundAmount: 2880, restock: true },
+    });
+    assert.equal(cartonReturn.status, 201);
+    assert.equal(Number((await call(`/products/${convertedProduct.data.id}`, { token: ownerA })).data.quantity), 48);
+    assert.equal(await app.get(PrismaService).productPriceHistory.count({ where: { businessId: businessIds[0], productId: convertedProduct.data.id } }), 1);
+
+    const variantParent = await call('/products', {
+      method: 'POST', token: ownerA,
+      body: { name: 'Variant Oil', unit: 'piece', buyingPrice: 20, sellingPrice: 30 },
+    });
+    assert.equal(variantParent.status, 201);
+    const variant = await call(`/products/${variantParent.data.id}/variants`, {
+      method: 'POST', token: ownerA,
+      body: { name: '500ml', attributes: { size: '500ml' }, sku: 'VAR-OIL-500', unit: 'bottle', buyingPrice: 10, sellingPrice: 15, minStock: 2 },
+    });
+    assert.equal(variant.status, 201);
+    const variantIntake = await call(`/product-variants/${variant.data.id}/stock`, {
+      method: 'POST', token: ownerA, key: 'variant-intake-once', body: { quantity: 3, unitCost: 10 },
+    });
+    assert.equal(variantIntake.status, 201);
+    assert.equal((await call(`/product-variants/${variant.data.id}/stock`, {
+      method: 'POST', token: ownerA, key: 'variant-intake-once', body: { quantity: 3, unitCost: 10 },
+    })).data.replayed, true);
+    const secondVariantParent = await call('/products', {
+      method: 'POST', token: ownerA,
+      body: { name: 'Second Variant Parent', unit: 'piece', buyingPrice: 1, sellingPrice: 2 },
+    });
+    const secondVariant = await call(`/products/${secondVariantParent.data.id}/variants`, {
+      method: 'POST', token: ownerA,
+      body: { name: 'Second', attributes: { size: 'second' }, unit: 'piece', buyingPrice: 1, sellingPrice: 2 },
+    });
+    assert.equal((await call(`/product-variants/${secondVariant.data.id}/stock`, {
+      method: 'POST', token: ownerA, key: 'variant-intake-once', body: { quantity: 3, unitCost: 10 },
+    })).status, 409);
+    const variantSale = await call('/sales', {
+      method: 'POST', token: ownerA, key: 'variant-sale-once',
+      body: { items: [{ variantId: variant.data.id, quantity: 1 }], method: 'CASH', amountPaid: 15 },
+    });
+    assert.equal(variantSale.status, 201);
+    assert.equal(variantSale.data.items[0].variantId, variant.data.id);
+    assert.equal(Number((await call(`/product-variants/${variant.data.id}`, { token: ownerA })).data.quantity), 2);
+    const variantLowStock = await call('/reports/low-stock', { token: ownerA });
+    assert.ok(variantLowStock.data.data.some((row) => row.variantId === variant.data.id && row.unit === 'bottle' && Number(row.quantity) === 2));
+    const variantMarket = await call('/reports/market-insights', { token: ownerA });
+    assert.equal(variantMarket.status, 200);
+    assert.ok(variantMarket.data.bestSellers.some((row) => row.variantId === variant.data.id && row.unit === 'bottle' && Number(row.quantitySold) === 1));
+    assert.equal((await call('/reports/stock-summary', { token: ownerA })).status, 200);
+    assert.equal((await call(`/product-variants/${variant.data.id}`, { method: 'PATCH', token: ownerA, body: { active: false } })).status, 400);
+    assert.equal((await call(`/product-variants/${variant.data.id}`, { method: 'DELETE', token: ownerA })).status, 400);
+
+    const concurrentParent = await call('/products', {
+      method: 'POST', token: ownerA,
+      body: { name: 'Concurrent Variant Parent', unit: 'piece', buyingPrice: 2, sellingPrice: 4 },
+    });
+    assert.equal((await call('/stock/intake', {
+      method: 'POST', token: ownerA, key: 'concurrent-parent-intake',
+      body: { productId: concurrentParent.data.id, quantity: 5, unitCost: 2 },
+    })).status, 201);
+    const concurrentVariants = await Promise.all(['A', 'B'].map((label) => call(`/products/${concurrentParent.data.id}/variants`, {
+      method: 'POST', token: ownerA,
+      body: { name: `Option ${label}`, attributes: { option: label }, unit: 'piece', buyingPrice: 2, sellingPrice: 4 },
+    })));
+    assert.deepEqual(concurrentVariants.map((result) => result.status), [201, 201]);
+    const variantsAfterRace = await call(`/products/${concurrentParent.data.id}/variants`, { token: ownerA });
+    assert.equal(variantsAfterRace.data.filter((row) => row.name === 'Standard').length, 1);
+    assert.equal(variantsAfterRace.data.reduce((total, row) => total + Number(row.quantity), 0), 5);
+    assert.equal(Number((await call(`/products/${concurrentParent.data.id}`, { token: ownerA })).data.quantity), 0);
+
+    const bundleProduct = await call('/products', {
+      method: 'POST', token: ownerA,
+      body: { name: 'Bundle', unit: 'pack', buyingPrice: 8, sellingPrice: 12 },
+    });
+    const bundleSetup = await call(`/products/${bundleProduct.data.id}/bundle`, {
+      method: 'PUT', token: ownerA, body: { items: [{ productId: productA.data.id, quantity: 1 }] },
+    });
+    assert.equal(bundleSetup.status, 200);
+    const bundleSale = await call('/sales', {
+      method: 'POST', token: ownerA, key: 'bundle-sale-once',
+      body: { items: [{ productId: bundleProduct.data.id, quantity: 1 }], method: 'CASH', amountPaid: 12 },
+    });
+    assert.equal(bundleSale.status, 201);
 
     const crossTenant = await call(`/products/${productA.data.id}`, { token: ownerB });
     assert.equal(crossTenant.status, 404);
@@ -133,7 +264,7 @@ test('API integration: tenant boundary, stock idempotency, sale, and M-Pesa flow
       body: { items: [{ productId: productA.data.id, quantity: 99 }], method: 'CASH', amountPaid: 10 },
     });
     assert.equal(oversell.status, 400);
-    assert.equal(Number((await app.get(PrismaService).stockLevel.findUnique({ where: { productId: productA.data.id } })).quantity), 2);
+    assert.equal(Number((await app.get(PrismaService).stockLevel.findUnique({ where: { productId: productA.data.id } })).quantity), 1);
 
     const customer = await call('/customers', {
       method: 'POST', token: ownerA,
@@ -226,6 +357,15 @@ test('API integration: tenant boundary, stock idempotency, sale, and M-Pesa flow
       await db.receipt.deleteMany({ where: { businessId } });
       await db.saleItem.deleteMany({ where: { businessId } });
       await db.sale.deleteMany({ where: { businessId } });
+      await db.bundleItem.deleteMany({ where: { businessId } });
+      await db.productBundle.deleteMany({ where: { businessId } });
+      await db.productImage.deleteMany({ where: { businessId } });
+      await db.productTagAssignment.deleteMany({ where: { businessId } });
+      await db.productTag.deleteMany({ where: { businessId } });
+      await db.unitConversion.deleteMany({ where: { businessId } });
+      await db.productPriceHistory.deleteMany({ where: { businessId } });
+      await db.variantStockMovement.deleteMany({ where: { businessId } });
+      await db.productVariant.deleteMany({ where: { businessId } });
       await db.stockLevel.deleteMany({ where: { businessId } });
       await db.product.deleteMany({ where: { businessId } });
       await db.category.deleteMany({ where: { businessId } });

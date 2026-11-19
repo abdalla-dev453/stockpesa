@@ -1,6 +1,28 @@
 import { PrismaClient, Role } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 const db = new PrismaClient();
+async function seedStressCatalog(businessId: string, requested: number) {
+  const count = Math.max(0, Math.min(20_000, Math.floor(requested)));
+  if (!count) return;
+  const categories = ["Stress Groceries", "Stress Drinks", "Stress Household", "Stress Personal Care", "Stress Hardware", "Stress Stationery", "Stress Produce", "Stress Kitchen"];
+  const categoryIds: string[] = [];
+  for (const name of categories) categoryIds.push((await db.category.upsert({ where: { businessId_name: { businessId, name } }, create: { businessId, name }, update: {} })).id);
+  let created = 0;
+  for (let offset = 0; offset < count; offset += 500) {
+    const end = Math.min(count, offset + 500);
+    const products = Array.from({ length: end - offset }, (_, index) => {
+      const n = offset + index + 1, categoryId = categoryIds[n % categoryIds.length];
+      const buyingPrice = 15 + (n * 37) % 1800;
+      return { businessId, categoryId, name: `Load Test Item ${String(n).padStart(5, "0")}`, sku: `LOAD-${String(n).padStart(6, "0")}`, unit: ["piece", "packet", "bottle", "kg", "pack"][n % 5], buyingPrice, sellingPrice: Math.round(buyingPrice * (1.1 + (n % 6) / 100) * 100) / 100, minStock: 5 + n % 20, reorderQty: 30 + n % 100 };
+    });
+    await db.product.createMany({ data: products, skipDuplicates: true });
+    const saved = await db.product.findMany({ where: { businessId, sku: { in: products.map((p) => p.sku!) } }, select: { id: true, buyingPrice: true, sku: true } });
+    const levels = saved.map((p) => ({ businessId, productId: p.id, quantity: 10 + (Number(p.sku?.slice(-3)) % 490) }));
+    await db.stockLevel.createMany({ data: levels, skipDuplicates: true });
+    created += saved.length;
+    console.log(`Load test catalog: ${created}/${count} products prepared`);
+  }
+}
 // [name, category, buy, sell, qty, min]
 const P: [string, string, number, number, number, number][] = [
   ["Unga Jogoo 2kg", "Groceries", 150, 175, 40, 10],
@@ -35,8 +57,13 @@ const P: [string, string, number, number, number, number][] = [
   ["Airtime Scratch Card", "Stationery", 95, 100, 25, 10],
 ];
 async function main() {
+  if (Number(process.env.STRESS_PRODUCT_COUNT ?? 0) > 0 && process.env.NODE_ENV === "production") {
+    throw new Error("Stress-test catalog seeding is disabled in production");
+  }
   const seeded = await db.user.findFirst({ where: { email: "owner@stockpesa.app" } });
   if (seeded) {
+    const count = Number(process.env.STRESS_PRODUCT_COUNT ?? 0);
+    if (count > 0) await seedStressCatalog(seeded.businessId, count);
     console.log("StockPesa demo data already exists; skipping seed.");
     return;
   }
@@ -117,6 +144,54 @@ async function main() {
       });
     prods.push(p);
   }
+  const oil = prods[P.findIndex((row) => row[0] === "Cooking Oil 1L")];
+  const oilVariant = await db.productVariant.create({
+    data: {
+      businessId: b.id,
+      productId: oil.id,
+      name: "500ml",
+      attributes: { size: "500ml" },
+      sku: "OIL-500ML",
+      unit: "bottle",
+      buyingPrice: 135,
+      sellingPrice: 165,
+      minStock: 8,
+      quantity: 24,
+    },
+  });
+  await db.variantStockMovement.create({
+    data: {
+      businessId: b.id,
+      variantId: oilVariant.id,
+      userId: owner.id,
+      quantityChange: 24,
+      unitCost: 135,
+      reason: "Opening stock",
+    },
+  });
+  const stationeryBundle = await db.product.create({
+    data: {
+      businessId: b.id,
+      categoryId: cats.Stationery,
+      name: "School Starter Pack",
+      sku: "BUNDLE-SCHOOL-01",
+      unit: "pack",
+      buyingPrice: 51,
+      sellingPrice: 70,
+    },
+  });
+  await db.productBundle.create({ data: { businessId: b.id, productId: stationeryBundle.id } });
+  await db.bundleItem.createMany({
+    data: [
+      { businessId: b.id, bundleProductId: stationeryBundle.id, componentId: prods[P.findIndex((row) => row[0] === "Exercise Book")].id, quantity: 1 },
+      { businessId: b.id, bundleProductId: stationeryBundle.id, componentId: prods[P.findIndex((row) => row[0] === "Pen Blue")].id, quantity: 1 },
+    ],
+  });
+  await db.unitConversion.create({
+    data: { businessId: b.id, productId: oil.id, fromUnit: "litre", toUnit: "millilitre", multiplier: 1000 },
+  });
+  const promoTag = await db.productTag.create({ data: { businessId: b.id, name: "Fast-moving" } });
+  await db.productTagAssignment.create({ data: { businessId: b.id, productId: prods[0].id, tagId: promoTag.id } });
   const cust = await db.customer.create({
     data: {
       businessId: b.id,
@@ -155,6 +230,8 @@ async function main() {
               businessId: b.id,
               productId: p.id,
               quantity: q,
+              unit: p.unit,
+              stockQuantity: q,
               unitPrice: p.sellingPrice,
               unitCost: p.buyingPrice,
               lineTotal: total,
@@ -208,5 +285,7 @@ async function main() {
     const qty = Number(p.stock?.quantity ?? 0);
     if (qty <= Number(p.minStock)) await db.alert.create({ data: { businessId: b.id, productId: p.id, kind: qty <= 0 ? "out_of_stock" : "low_stock" } });
   }
+  const stressCount = Number(process.env.STRESS_PRODUCT_COUNT ?? 0);
+  if (stressCount > 0) await seedStressCatalog(b.id, stressCount);
 }
 main().finally(() => db.$disconnect());

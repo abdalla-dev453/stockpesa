@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../core/api.dart';
 import '../core/theme.dart';
 import '../core/validation.dart';
+import 'legal_screen.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({
@@ -63,6 +64,8 @@ class _AuthScreenState extends State<AuthScreen> {
             'email': identifier.text.trim(),
             'password': password.text,
             'location': location.text.trim(),
+            'acceptedTerms': acceptedTerms,
+            'termsVersion': '1.0',
           },
         );
         await saveTokens(Map<String, dynamic>.from(response.data as Map));
@@ -94,18 +97,13 @@ class _AuthScreenState extends State<AuthScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Container(
-                    width: 68,
-                    height: 68,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: C.emerald,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Icon(
-                      Icons.inventory_2,
-                      color: Colors.white,
-                      size: 34,
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Image.asset(
+                      'assets/branding/stockpesa-icon-96.png',
+                      width: 64,
+                      height: 64,
+                      semanticLabel: 'StockPesa logo',
                     ),
                   ),
                   const SizedBox(height: 24),
@@ -219,6 +217,29 @@ class _AuthScreenState extends State<AuthScreen> {
                         style: TextStyle(fontSize: 13),
                       ),
                       controlAffinity: ListTileControlAffinity.leading,
+                    ),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const LegalScreen(privacy: true),
+                            ),
+                          ),
+                          child: const Text('Read privacy policy'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const LegalScreen(privacy: false),
+                            ),
+                          ),
+                          child: const Text('Read terms'),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 8),
                   ] else if (widget.onForgotPassword != null)

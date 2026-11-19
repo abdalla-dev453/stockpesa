@@ -13,11 +13,17 @@ flutter run --dart-define=API=http://10.0.2.2:3000
 
 Use a Flutter release that includes Dart 3.10 or newer and a Java 17+ JDK for Android builds.
 
-`10.0.2.2` reaches the host machine from an Android emulator. Use `http://localhost:3000` for an iOS simulator, or the development computer's LAN address for a physical phone. Start the API and PostgreSQL from the repository root with `docker compose up --build`.
+The app chooses `http://10.0.2.2:3000` for Android emulators and `http://localhost:3000` for web, desktop, and iOS simulators. A physical phone must use the development computer's LAN address, for example `flutter run --dart-define=API=http://192.168.1.20:3000`; the phone and computer must be on the same network and the computer firewall must allow port 3000. Start the API and PostgreSQL from the repository root with `docker compose up --build`.
 
-The app defaults to the Android emulator API URL. Override it with `--dart-define=API=...`; do not commit live API credentials or production URLs. For production, provide an HTTPS URL through the same build define.
+Override the platform default with `--dart-define=API=...` when needed; do not commit live API credentials or production URLs. For production, provide an HTTPS URL through the same build define.
 Android permits cleartext HTTP only in the debug manifest for local API testing; release builds do not enable it.
 `.env.example` documents the development value; Flutter does not load that file automatically.
+
+## Push notifications
+
+Firebase Messaging is optional until Firebase values are configured. Initialize a Firebase Android/iOS app, enable Cloud Messaging, and build with `FIREBASE_PROJECT_ID`, `FIREBASE_MESSAGING_SENDER_ID`, `FIREBASE_API_KEY`, and the matching `FIREBASE_ANDROID_APP_ID` or `FIREBASE_IOS_APP_ID` dart-defines. iOS also needs `FIREBASE_IOS_BUNDLE_ID`, the Push Notifications capability, and an APNs key configured in Firebase. Never put service-account credentials in the mobile build; the API receives `FIREBASE_SERVICE_ACCOUNT_JSON` from a deployment secret manager.
+
+The app asks notification permission from Settings → Notification preferences, registers authorized tokens with the authenticated API, handles foreground messages, routes notification taps, and revokes the token on sign out. The API outbox sends low/out-of-stock transition messages to opted-in business users and deactivates invalid tokens. Other event types can be controlled in preferences but require their event producers before delivery is active.
 
 ## Structure
 
@@ -53,21 +59,22 @@ Repositories keep endpoint calls out of new presentation code. The legacy screen
 | `/customers`, `/customers/:customerId` | Search/edit customers, debt filter, unpaid sales, recent purchases, payments, create a sale for the customer |
 | `/sales`, `/sales/:saleId/receipt` | Sales history, return flow, receipt preview, PDF share/download, text summary |
 | `/categories` | Product categories |
-| `/alerts`, `/reports`, `/settings`, `/staff`, `/more` | Alerts, reports, business profile, roles, management links |
+| `/alerts`, `/reports`, `/market-insights`, `/settings`, `/notification-settings`, `/staff`, `/privacy`, `/terms`, `/more` | Business alerts/insights, preferences, legal templates, profile, roles and management links |
 
-On screens narrower than 600 logical pixels, navigation uses a bottom bar. Wider layouts use a navigation rail. The system theme controls light and dark appearance.
+On screens narrower than 600 logical pixels, navigation uses a bottom bar. Wider layouts use a navigation rail. Users can follow system appearance or select light/dark mode in settings.
 
 ## Screen descriptions
 
 - **Home:** current-day/month sales, stock warnings, unread alert count, and shortcuts into selling and inventory.
-- **Products:** searchable catalogue with stock/category filters, product detail/edit, barcode scan/create, and CSV import.
-- **Sell:** searchable/scannable catalogue and editable cart, saved/parked carts, discount, payment selection, customer credit checks, cash change, and idempotent checkout. The payment step clearly shows server-side payment limitations.
+- **Products:** searchable catalogue with stock/category filters, product detail/edit, barcode scan/create, and CSV import. Product details can manage variants and their stock, bundle contents, image URLs, tags, promotions, and unit conversions, and review price changes.
+- **Sell:** searchable/scannable catalogue and editable cart, saved/parked carts, discount, payment selection, customer credit checks, cash change, and idempotent checkout. Products with variants prompt for the option; scanning a variant barcode selects it directly. The payment step clearly shows server-side payment limitations.
 - **Receipt:** backend receipt snapshot rendered as a preview with PDF share/download and a text summary. Print integration is identified as unavailable.
 - **Customers:** search/edit, debt-only filter, unpaid and recent purchases, payment recording, and customer-prefilled sale start.
 - **Sales history:** transaction actions include receipt, sharing, and a quantity-limited return with explicit restock choice and recorded refund/balance summary.
 - **Inventory and alerts:** stock intake, adjustment, movement history, counts, low/out-of-stock filters, read state, and product navigation.
 - **Reports:** role-filtered live business figures, sales/payment/profit summary, customer debt, stock value and warnings, recent stock movements, and top products.
-- **Staff/settings:** owner-managed team roles and deactivation; editable business profile and receipt footer.
+- **Market insights:** tenant-scoped 7/30-day sales patterns, best/slow movers, stock health and explicitly estimated run-out timing.
+- **Staff/settings:** owner-managed team roles and deactivation; editable business profile, receipt footer, theme, push preferences and legal templates.
 
 ## API coverage and known server limits
 

@@ -13,26 +13,23 @@ import '../screens/detail_screens.dart';
 import '../screens/more_screen.dart' show AlertsScreen;
 import '../screens/products_screen.dart';
 import '../screens/receipt_screen.dart';
+import '../screens/legal_screen.dart';
+import '../screens/market_insights_screen.dart';
+import '../screens/notification_preferences_screen.dart';
 import '../screens/sell_screen.dart';
 import '../screens/stock_screen.dart';
 import 'shell.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   final refresh = _RouterRefresh();
-  ref.listen(sessionProvider, (_, __) => refresh.ping());
+  ref.listen(sessionProvider, (_, _) => refresh.ping());
   final router = GoRouter(
     initialLocation: '/splash',
     refreshListenable: refresh,
     redirect: (context, state) {
       final session = ref.read(sessionProvider);
       final path = state.matchedLocation;
-      const public = {
-        '/splash',
-        '/onboarding',
-        '/login',
-        '/register',
-        '/forgot-password',
-      };
+      const authRoutes = {'/login', '/register', '/forgot-password'};
       if (session.status == SessionStatus.loading) {
         return path == '/splash' ? null : '/splash';
       }
@@ -41,7 +38,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
       if (!session.onboardingComplete && path == '/onboarding') return null;
       if (session.status == SessionStatus.signedOut) {
-        return public.contains(path) ? null : '/login';
+        return authRoutes.contains(path) ? null : '/login';
       }
       if (path == '/onboarding' ||
           path == '/splash' ||
@@ -53,8 +50,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
-      GoRoute(path: '/splash', builder: (_, __) => const SplashPage()),
-      GoRoute(path: '/onboarding', builder: (_, __) => const OnboardingPage()),
+      GoRoute(path: '/splash', builder: (_, _) => const SplashPage()),
+      GoRoute(path: '/onboarding', builder: (_, _) => const OnboardingPage()),
       GoRoute(
         path: '/login',
         builder: (context, _) => AuthScreen(
@@ -64,14 +61,14 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/register',
-        builder: (_, __) => AuthScreen(
+        builder: (_, _) => AuthScreen(
           startInRegistration: true,
           onAuthenticated: () => ref.read(sessionProvider.notifier).signedIn(),
         ),
       ),
       GoRoute(
         path: '/forgot-password',
-        builder: (_, __) => const ForgotPasswordPage(),
+        builder: (_, _) => const ForgotPasswordPage(),
       ),
       ShellRoute(
         builder: (context, state, child) =>
@@ -79,11 +76,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         routes: [
           GoRoute(
             path: '/dashboard',
-            builder: (_, __) => const DashboardScreen(),
+            builder: (_, _) => const DashboardScreen(),
           ),
           GoRoute(
             path: '/products',
-            builder: (_, __) => const ProductsScreen(),
+            builder: (_, _) => const ProductsScreen(),
             routes: [
               GoRoute(
                 path: 'add',
@@ -94,7 +91,7 @@ final routerProvider = Provider<GoRouter>((ref) {
               ),
               GoRoute(
                 path: 'import',
-                builder: (_, __) =>
+                builder: (_, _) =>
                     const ProductsScreen(initialAction: 'import'),
               ),
               GoRoute(
@@ -117,10 +114,10 @@ final routerProvider = Provider<GoRouter>((ref) {
               initialCustomerId: state.uri.queryParameters['customerId'],
             ),
             routes: [
-              GoRoute(path: 'cart', builder: (_, __) => const SellScreen()),
+              GoRoute(path: 'cart', builder: (_, _) => const SellScreen()),
               GoRoute(
                 path: 'payment',
-                builder: (_, __) => const SellScreen(paymentStep: true),
+                builder: (_, _) => const SellScreen(paymentStep: true),
               ),
               GoRoute(
                 path: 'success/:saleId',
@@ -135,30 +132,30 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/stock',
-            builder: (_, __) => const StockScreen(),
+            builder: (_, _) => const StockScreen(),
             routes: [
               GoRoute(
                 path: 'intake',
-                builder: (_, __) => const StockScreen(initialAction: 'intake'),
+                builder: (_, _) => const StockScreen(initialAction: 'intake'),
               ),
               GoRoute(
                 path: 'adjust',
-                builder: (_, __) => const StockScreen(initialAction: 'adjust'),
+                builder: (_, _) => const StockScreen(initialAction: 'adjust'),
               ),
               GoRoute(
                 path: 'count',
-                builder: (_, __) => const StockCountsScreen(),
+                builder: (_, _) => const StockCountsScreen(),
               ),
               GoRoute(
                 path: 'movements',
-                builder: (_, __) =>
+                builder: (_, _) =>
                     const StockScreen(initialAction: 'movements'),
               ),
             ],
           ),
           GoRoute(
             path: '/customers',
-            builder: (_, __) => const CustomersScreen(),
+            builder: (_, _) => const CustomersScreen(),
             routes: [
               GoRoute(
                 path: ':customerId',
@@ -168,10 +165,10 @@ final routerProvider = Provider<GoRouter>((ref) {
               ),
             ],
           ),
-          GoRoute(path: '/alerts', builder: (_, __) => const AlertsScreen()),
+          GoRoute(path: '/alerts', builder: (_, _) => const AlertsScreen()),
           GoRoute(
             path: '/sales',
-            builder: (_, __) => const SalesHistoryScreen(),
+            builder: (_, _) => const SalesHistoryScreen(),
           ),
           GoRoute(
             path: '/sales/:saleId/receipt',
@@ -180,15 +177,31 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/categories',
-            builder: (_, __) => const CategoriesScreen(),
+            builder: (_, _) => const CategoriesScreen(),
           ),
-          GoRoute(path: '/reports', builder: (_, __) => const ReportsScreen()),
+          GoRoute(path: '/reports', builder: (_, _) => const ReportsScreen()),
+          GoRoute(
+            path: '/market-insights',
+            builder: (_, _) => const MarketInsightsScreen(),
+          ),
+          GoRoute(
+            path: '/notification-settings',
+            builder: (_, _) => const NotificationPreferencesScreen(),
+          ),
           GoRoute(
             path: '/settings',
-            builder: (_, __) => const BusinessSettingsScreen(),
+            builder: (_, _) => const BusinessSettingsScreen(),
           ),
-          GoRoute(path: '/staff', builder: (_, __) => const StaffScreen()),
-          GoRoute(path: '/more', builder: (_, __) => const MoreHubScreen()),
+          GoRoute(
+            path: '/privacy',
+            builder: (_, _) => const LegalScreen(privacy: true),
+          ),
+          GoRoute(
+            path: '/terms',
+            builder: (_, _) => const LegalScreen(privacy: false),
+          ),
+          GoRoute(path: '/staff', builder: (_, _) => const StaffScreen()),
+          GoRoute(path: '/more', builder: (_, _) => const MoreHubScreen()),
         ],
       ),
     ],
@@ -213,14 +226,11 @@ class SplashPage extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Image(
-            image: AssetImage('assets/branding/stockpesa-icon.png'),
-            width: 64,
-            height: 64,
-          ),
-          SizedBox(height: 14),
-          Text(
-            'StockPesa',
-            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
+            image: AssetImage('assets/branding/logo-wordmark-1440.png'),
+            width: 240,
+            height: 55,
+            fit: BoxFit.contain,
+            semanticLabel: 'StockPesa',
           ),
           SizedBox(height: 24),
           CircularProgressIndicator(),
@@ -262,8 +272,13 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
     super.dispose();
   }
 
-  Future<void> finish() async =>
-      ref.read(sessionProvider.notifier).finishOnboarding();
+  Future<void> finish() async {
+    await ref.read(sessionProvider.notifier).finishOnboarding();
+    if (mounted) {
+      context.go('/login');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -284,11 +299,20 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
                   itemBuilder: (_, i) => Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
-                        slides[i].$1,
-                        size: 94,
-                        color: const Color(0xFF0B7A4B),
-                      ),
+                      if (i == 0)
+                        Image.asset(
+                          'assets/branding/onboarding-stock.png',
+                          width: 240,
+                          height: 180,
+                          fit: BoxFit.contain,
+                          semanticLabel: 'Retail shelves and inventory box',
+                        )
+                      else
+                        Icon(
+                          slides[i].$1,
+                          size: 94,
+                          color: const Color(0xFF0B7A4B),
+                        ),
                       const SizedBox(height: 32),
                       Text(
                         slides[i].$2,

@@ -4,6 +4,7 @@ import { Type } from "class-transformer";
 import { IsIn, IsNumber, IsOptional, IsString, IsUUID, Min, MinLength, MaxLength, Matches } from "class-validator";
 import { PrismaService } from "../prisma.service";
 import { AuthGuard, Me, Roles } from "../common/auth";
+import { enqueuePushEvent } from "../notifications/push_outbox";
 import { cents, money } from "../common/money";
 import { KENYAN_MOBILE_PATTERN, normalizeKenyanPhone } from "../common/phone";
 
@@ -79,6 +80,14 @@ class CustomersController {
       const payment = await tx.payment.create({ data: { businessId: u.businessId, customerId: id, saleId: d.saleId, method: d.method as any, amount, settledAt: new Date(), reference: d.reference, idempotencyKey: key, idempotencyPayload: key ? payload : undefined } });
       await tx.customer.update({ where: { id }, data: { balance: { decrement: amount } } });
       await tx.auditLog.create({ data: { businessId: u.businessId, userId: u.sub, action: "customer.payment.recorded", entity: "payment", entityId: payment.id, meta: { saleId: sale.id, customerId: id, amount, method: d.method, reference: d.reference ?? null } } });
+      await enqueuePushEvent(tx, {
+        businessId: u.businessId,
+        eventKey: `customer-payment:${payment.id}`,
+        kind: "customer_payment",
+        title: "Customer payment recorded",
+        body: `${c.name} paid KES ${amount.toFixed(2)}. Remaining balance: KES ${(Number(c.balance) - amount).toFixed(2)}.`,
+        data: { customerId: id, path: `/customers/${id}`, paymentId: payment.id },
+      });
       return payment;
     });
   }
