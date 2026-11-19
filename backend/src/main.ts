@@ -4,6 +4,7 @@ import { NestFactory } from "@nestjs/core";
 import { ValidationPipe, Logger } from "@nestjs/common";
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
 import * as express from "express";
+import { join } from "node:path";
 import { AppModule } from "./app.module";
 async function bootstrap() {
   const production = process.env.NODE_ENV === "production";
@@ -46,6 +47,10 @@ async function bootstrap() {
     next();
   });
   server.disable("x-powered-by");
+  server.use("/uploads", express.static(join(process.env.UPLOAD_DIR ?? "uploads"), {
+    dotfiles: "deny", fallthrough: false, immutable: true, maxAge: "1y",
+    setHeaders: (res) => res.setHeader("Cross-Origin-Resource-Policy", "cross-origin"),
+  }));
   server.use(express.json({ limit: "256kb" }));
   server.use(express.urlencoded({ limit: "256kb", extended: true }));
   if (Number.isInteger(proxyHops) && proxyHops > 0) server.set("trust proxy", proxyHops);

@@ -46,6 +46,9 @@ import { Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { AuthGuard, Me, Roles } from "../common/auth";
 import { StockModule, StockService } from "../stock/stock.module";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 const UNITS = ["piece", "kg", "gram", "litre", "millilitre", "packet", "carton", "bale", "dozen", "bottle", "pack", "other"];
 class CategoryDto {
@@ -476,12 +479,17 @@ class ProductPowerController {
     }
     try {
       return await this.db.$transaction(async (tx) => {
-        if (parent.variants.length === 0 && Number(parent.stock?.quantity ?? 0) > 0) {
-          const openingQuantity = parent.stock!.quantity;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${u.businessId + ":product-variants:" + id}))`;
+        const lockedParent = await tx.product.findFirst({ where: { id, businessId: u.businessId, deletedAt: null }, include: { stock: true, variants: { where: { deletedAt: null } } } });
+        if (!lockedParent) throw new NotFoundException("Product not found");
+        if (lockedParent.variants.length === 0 && Number(lockedParent.stock?.quantity ?? 0) < 0)
+          throw new BadRequestException("Adjust negative stock before adding variants");
+        if (lockedParent.variants.length === 0 && Number(lockedParent.stock?.quantity ?? 0) > 0) {
+          const openingQuantity = lockedParent.stock!.quantity;
           const standard = await tx.productVariant.create({ data: {
             businessId: u.businessId, productId: id, name: "Standard", attributes: { option: "Standard" },
-            sku: parent.sku, barcode: parent.barcode, unit: parent.unit, buyingPrice: parent.buyingPrice,
-            sellingPrice: parent.sellingPrice, wholesalePrice: parent.wholesalePrice, minStock: parent.minStock,
+            sku: lockedParent.sku, barcode: lockedParent.barcode, unit: lockedParent.unit, buyingPrice: lockedParent.buyingPrice,
+            sellingPrice: lockedParent.sellingPrice, wholesalePrice: lockedParent.wholesalePrice, minStock: lockedParent.minStock,
             quantity: openingQuantity,
           } });
           await tx.stockLevel.update({ where: { productId: id }, data: { quantity: 0 } });
@@ -509,6 +517,7 @@ class ProductPowerController {
   async updateVariant(@Me() u: any, @Param("id", ParseUUIDPipe) id: string, @Body() d: VariantPatchDto) {
     const current = await this.db.productVariant.findFirst({ where: { id, businessId: u.businessId, deletedAt: null } });
     if (!current) throw new NotFoundException("Product variant not found");
+    if (d.active === false && Number(current.quantity) > 0) throw new BadRequestException("Receive or sell the remaining variant stock before deactivating it");
     const codes = [d.sku, d.barcode].filter(Boolean) as string[];
     if (codes.length) {
       const [productCode, variantCode] = await Promise.all([
@@ -528,6 +537,7 @@ class ProductPowerController {
   async archiveVariant(@Me() u: any, @Param("id", ParseUUIDPipe) id: string) {
     const current = await this.db.productVariant.findFirst({ where: { id, businessId: u.businessId, deletedAt: null } });
     if (!current) throw new NotFoundException("Product variant not found");
+    if (Number(current.quantity) > 0) throw new BadRequestException("Receive or sell the remaining variant stock before archiving it");
     await this.db.$transaction(async (tx) => {
       await tx.productVariant.update({ where: { id }, data: { active: false, deletedAt: new Date() } });
       await tx.auditLog.create({ data: { businessId: u.businessId, userId: u.sub, action: "product.variant_archived", entity: "product_variant", entityId: id } });
@@ -543,7 +553,7 @@ class ProductPowerController {
       if (key) {
         const prior = await tx.variantStockMovement.findFirst({ where: { businessId: u.businessId, idempotencyKey: key } });
         if (prior) {
-          if (Number(prior.quantityChange) !== d.quantity || Number(prior.unitCost ?? 0) !== d.unitCost) throw new ConflictException("Idempotency-Key was already used for a different stock receipt");
+          if (prior.variantId !== id || Number(prior.quantityChange) !== d.quantity || Number(prior.unitCost ?? 0) !== d.unitCost || (prior.reason ?? "") !== (d.reason ?? "Stock received")) throw new ConflictException("Idempotency-Key was already used for a different stock receipt");
           return { movement: prior, replayed: true };
         }
       }
@@ -599,7 +609,7 @@ class ProductPowerController {
 
   @Get("unit-conversions")
   conversions(@Me() u: any, @Query("productId") productId?: string) {
-    return this.db.unitConversion.findMany({ where: { businessId: u.businessId, ...(productId ? { productId } : {}) }, orderBy: [{ fromUnit: "asc" }, { toUnit: "asc" }] });
+    return this.db.unitConversion.findMany({ where: { businessId: u.businessId, ...(productId ? { OR: [{ productId }, { productId: null }] } : {}) }, orderBy: [{ fromUnit: "asc" }, { toUnit: "asc" }] });
   }
 
   @Post("unit-conversions") @Roles("OWNER", "MANAGER")
@@ -612,7 +622,15 @@ class ProductPowerController {
     const dimension = (unit: string) => ["kg", "gram"].includes(unit) ? "weight" : ["litre", "millilitre"].includes(unit) ? "volume" : "count";
     if (dimension(fromUnit) !== dimension(toUnit)) throw new BadRequestException("These units cannot be converted into each other");
     try {
-      return await this.db.unitConversion.create({ data: { businessId: u.businessId, productId: d.productId, fromUnit, toUnit, multiplier: d.multiplier } });
+      return await this.db.$transaction(async (tx) => {
+        const scope = d.productId ?? "business";
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${u.businessId + ":unit-conversion:" + scope}))`;
+        if (await tx.unitConversion.findFirst({ where: { businessId: u.businessId, productId: d.productId ?? null, OR: [{ fromUnit, toUnit }, { fromUnit: toUnit, toUnit: fromUnit }] } }))
+          throw new ConflictException("That unit conversion or its reverse already exists");
+        const conversion = await tx.unitConversion.create({ data: { businessId: u.businessId, productId: d.productId, fromUnit, toUnit, multiplier: d.multiplier } });
+        await tx.auditLog.create({ data: { businessId: u.businessId, userId: u.sub, action: "product.unit_conversion_created", entity: "unit_conversion", entityId: conversion.id, meta: { productId: d.productId ?? null, fromUnit, toUnit, multiplier: d.multiplier } } });
+        return conversion;
+      });
     } catch (e: any) { if (e.code === "P2002") throw new ConflictException("That unit conversion already exists"); throw e; }
   }
 
@@ -631,6 +649,36 @@ class ProductPowerController {
       if (!(await tx.product.findUnique({ where: { id }, select: { imageUrl: true } }))?.imageUrl) await tx.product.update({ where: { id }, data: { imageUrl: d.url } });
       return image;
     });
+  }
+
+  @Post("products/:id/images/upload") @Roles("OWNER", "MANAGER")
+  @UseInterceptors(FileInterceptor("file", {
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (_req, file, done) => {
+      if (!["image/jpeg", "image/png", "image/webp"].includes(file.mimetype)) return done(new BadRequestException("Upload a JPEG, PNG, or WebP image"), false);
+      done(null, true);
+    },
+  }))
+  async uploadImage(@Me() u: any, @Param("id", ParseUUIDPipe) id: string, @UploadedFile() file?: any) {
+    if (!file?.buffer?.length) throw new BadRequestException("Choose an image to upload");
+    const signature = file.mimetype === "image/jpeg" ? file.buffer.subarray(0, 3).toString("hex") === "ffd8ff"
+      : file.mimetype === "image/png" ? file.buffer.subarray(0, 8).toString("hex") === "89504e470d0a1a0a"
+      : file.buffer.subarray(0, 4).toString("ascii") === "RIFF" && file.buffer.subarray(8, 12).toString("ascii") === "WEBP";
+    if (!signature) throw new BadRequestException("The uploaded file is not a valid image");
+    await this.product(u, id);
+    const ext = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[file.mimetype] ?? "jpg";
+    const filename = `${randomUUID()}.${ext}`;
+    const directory = join(process.env.UPLOAD_DIR ?? "uploads", "products");
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, filename), file.buffer, { flag: "wx" });
+    const url = `/uploads/products/${filename}`;
+    try {
+      return await this.db.$transaction(async (tx) => {
+        const image = await tx.productImage.create({ data: { businessId: u.businessId, productId: id, url, altText: file.originalname.slice(0, 200) } });
+        if (!(await tx.product.findUnique({ where: { id }, select: { imageUrl: true } }))?.imageUrl) await tx.product.update({ where: { id }, data: { imageUrl: url } });
+        return image;
+      });
+    } catch (error) { await unlink(join(directory, filename)).catch(() => undefined); throw error; }
   }
 
   @Delete("products/:id/images/:imageId") @Roles("OWNER", "MANAGER")

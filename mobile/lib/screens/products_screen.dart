@@ -12,6 +12,12 @@ import '../core/widgets/app_states.dart';
 import '../features/products/data/products_repository.dart';
 import '../features/stock/data/stock_repository.dart';
 
+String? _productImageUrl(Object? value) {
+  final url = value?.toString();
+  if (url == null || url.isEmpty) return null;
+  return url.startsWith('https://') ? url : '$apiBase$url';
+}
+
 class ProductsScreen extends StatefulWidget {
   const ProductsScreen({super.key, this.initialAction, this.initialBarcode});
   final String? initialAction;
@@ -121,6 +127,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
         barcode = TextEditingController(text: initialBarcode ?? '');
     String unit = 'piece';
     String? categoryId;
+    PlatformFile? productPhoto;
     final ok = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -237,6 +244,15 @@ class _ProductsScreenState extends State<ProductsScreen> {
                     labelText: 'Low stock threshold',
                   ),
                 ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final result = await FilePicker.pickFiles(type: FileType.image);
+                    if (result.isNotEmpty) setSheet(() => productPhoto = result.single);
+                  },
+                  icon: const Icon(Icons.add_a_photo_outlined),
+                  label: Text(productPhoto == null ? 'Choose product photo' : 'Photo: ${productPhoto!.name}'),
+                ),
                 const SizedBox(height: 16),
                 FilledButton(
                   onPressed: () async {
@@ -256,7 +272,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       return;
                     }
                     try {
-                      await dio.post(
+                      final created = await dio.post(
                         '/products',
                         data: {
                           'name': name.text.trim(),
@@ -278,6 +294,16 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       );
                       if (context.mounted) {
                         Navigator.pop(context, true);
+                      }
+                      if (productPhoto != null) {
+                        try {
+                          final bytes = await productPhoto!.readAsBytes();
+                          await dio.post('/products/${created.data['id']}/images/upload', data: FormData.fromMap({
+                            'file': MultipartFile.fromBytes(bytes, filename: productPhoto!.name),
+                          }));
+                        } catch (e) {
+                          if (mounted) _message('Product created, but its photo could not be uploaded: ${apiError(e)}');
+                        }
                       }
                     } catch (e) {
                       if (context.mounted) {
@@ -720,7 +746,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                     : ListView.separated(
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
                         itemCount: rows.length + (totalPages > 1 ? 1 : 0),
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        separatorBuilder: (_, _) => const SizedBox(height: 8),
                         itemBuilder: (context, i) {
                           if (i == rows.length) {
                             return Row(
@@ -763,10 +789,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
                             child: ListTile(
                               leading: CircleAvatar(
                                 backgroundColor: color.withValues(alpha: .12),
-                                child: Icon(
-                                  Icons.inventory_2_outlined,
-                                  color: color,
-                                ),
+                                backgroundImage: _productImageUrl(p['imageUrl']) == null ? null : NetworkImage(_productImageUrl(p['imageUrl'])!),
+                                child: _productImageUrl(p['imageUrl']) == null ? Icon(Icons.inventory_2_outlined, color: color) : null,
                               ),
                               title: Text(
                                 p['name'] ?? 'Product',
@@ -935,8 +959,9 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                   buying == null ||
                   selling == null ||
                   buying < 0 ||
-                  selling < 0)
+                  selling < 0) {
                 return;
+              }
               Navigator.pop(context, {
                 'name': name.text.trim(),
                 'attributes': {'option': name.text.trim()},
@@ -959,10 +984,11 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
       await dio.post('/products/${widget.productId}/variants', data: body);
       setState(() => data = _load());
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
     }
   }
 
@@ -1023,10 +1049,11 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
       );
       setState(() => data = _load());
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
     }
   }
 
@@ -1048,8 +1075,9 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
           ),
           FilledButton(
             onPressed: () {
-              if (url.text.trim().startsWith('https://'))
+              if (url.text.trim().startsWith('https://')) {
                 Navigator.pop(context, url.text.trim());
+              }
             },
             child: const Text('Save'),
           ),
@@ -1064,10 +1092,26 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
       );
       setState(() => data = _load());
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
+    }
+  }
+
+  Future<void> _uploadImage() async {
+    final result = await FilePicker.pickFiles(type: FileType.image);
+    if (result.isEmpty) return;
+    final file = result.single;
+    try {
+      final bytes = await file.readAsBytes();
+      await dio.post('/products/${widget.productId}/images/upload', data: FormData.fromMap({
+        'file': MultipartFile.fromBytes(bytes, filename: file.name),
+      }));
+      if (mounted) setState(() => data = _load());
+    } catch (error) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(apiError(error))));
     }
   }
 
@@ -1120,10 +1164,11 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
       );
       setState(() => data = _load());
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
     }
   }
 
@@ -1169,10 +1214,11 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
       );
       setState(() => data = _load());
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
     }
   }
 
@@ -1241,13 +1287,14 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
           FilledButton(
             onPressed: () {
               final parsed = double.tryParse(multiplier.text);
-              if (parsed != null && parsed > 0 && from != to)
+              if (parsed != null && parsed > 0 && from != to) {
                 Navigator.pop(context, {
                   'productId': widget.productId,
                   'fromUnit': from,
                   'toUnit': to,
                   'multiplier': parsed,
                 });
+              }
             },
             child: const Text('Save'),
           ),
@@ -1259,10 +1306,11 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
       await dio.post('/unit-conversions', data: result);
       setState(() => data = _load());
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
     }
   }
 
@@ -1359,8 +1407,9 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                           if (values.isNotEmpty &&
                               values.every(
                                 (row) => (row['quantity'] as double) > 0,
-                              ))
+                              )) {
                             Navigator.pop(context, values);
+                          }
                         },
                         child: const Text('Save bundle'),
                       ),
@@ -1382,10 +1431,11 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
       );
       setState(() => data = _load());
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
     }
   }
 
@@ -1540,6 +1590,11 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                           label: const Text('Add image URL'),
                         ),
                         OutlinedButton.icon(
+                          onPressed: _uploadImage,
+                          icon: const Icon(Icons.add_a_photo_outlined),
+                          label: const Text('Upload photo'),
+                        ),
+                        OutlinedButton.icon(
                           onPressed: _editTags,
                           icon: const Icon(Icons.sell_outlined),
                           label: const Text('Edit tags'),
@@ -1573,7 +1628,11 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                 children: images.map((value) {
                   final image = Map<String, dynamic>.from(value as Map);
                   return ListTile(
-                    leading: const Icon(Icons.image_outlined),
+                    leading: SizedBox(width: 48, height: 48, child: Image.network(
+                      _productImageUrl(image['url'])!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => const Icon(Icons.image_not_supported_outlined),
+                    )),
                     title: Text(
                       image['altText']?.toString().isNotEmpty == true
                           ? image['altText']

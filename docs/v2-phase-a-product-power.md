@@ -67,7 +67,7 @@ Product stock intake accepts an optional `unit`, and sale items accept the same 
 ## Flutter screen map
 
 - **Products list:** existing search, category, stock filters, and add flow.
-- **Product details:** status and promotion summary, variants, stock receipt by variant, image URL entries, bundle contents, price history, and existing stock movements.
+- **Product details:** status and promotion summary, variants, stock receipt by variant, uploaded product photos or HTTPS image URLs, bundle contents, price history, and existing stock movements.
 - **Sell:** selecting a product with active variants prompts for an option; barcode lookup adds a matched variant directly. Products with conversion rules offer a selling-unit choice.
 - **Stock:** receiving a product with conversion rules offers a receiving-unit choice and labels the entered-unit cost.
 - **Checkout:** submits `productId` for a regular item, `variantId` for a variant, and the selected `unit` where applicable; receipts retain the entered quantity and unit.
@@ -89,4 +89,4 @@ Demo: open Cooking Oil 1L, receive its 500ml variant, scan the variant barcode i
 
 ## Current scope boundary
 
-Image records currently store HTTPS URLs. Binary upload, automatic compression, camera/gallery selection, and persistent image caching remain out of scope until an image-storage provider and deployment storage policy are configured. Unit conversions now apply to stock intake and product sales; purchase orders and GRNs will build on this support in Phase B.
+Product images can be uploaded as JPEG, PNG, or WebP files up to 5 MB and are served from the API's `/uploads` path. Docker Compose persists them in its `uploads` volume; other deployments must point `UPLOAD_DIR` at persistent storage. Automatic compression, direct camera capture, and client image caching are not included. Unit conversions now apply to stock intake and product sales; purchase orders and GRNs will build on this support in Phase B.

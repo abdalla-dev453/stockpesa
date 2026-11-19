@@ -184,6 +184,14 @@ Local development automatically seeds demo accounts with the password `Demo1234!
 
 _Note: Demo credentials and sample seed data are strictly for local and staging environments._
 
+To add a deterministic catalog load to the local demo business, run from `backend/`:
+
+```bash
+STRESS_PRODUCT_COUNT=5000 npm run prisma:seed
+```
+
+The seed creates products in 500-row batches with stock levels and `LOAD-` SKUs. It can be rerun safely, accepts 1–20,000 products, and refuses to run when `NODE_ENV=production`. Use a disposable local or staging database for load testing. Uploaded product photos are kept in the Docker `uploads` volume; set `UPLOAD_DIR` to persistent storage when deploying outside Compose.
+
 ---
 
 ## API Architecture & Security
