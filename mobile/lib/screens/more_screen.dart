@@ -246,7 +246,7 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
                     }
                     return ListView.separated(
                       itemCount: visible.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      separatorBuilder: (_, _) => const Divider(height: 1),
                       itemBuilder: (context, i) {
                         final a = visible[i] as Map, p = a['product'] as Map?;
                         final isRead = a['read'] == true;

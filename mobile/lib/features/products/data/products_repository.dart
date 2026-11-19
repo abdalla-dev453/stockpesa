@@ -21,8 +21,8 @@ class ProductsRepository {
             'page': page,
             'limit': limit,
             if (search?.isNotEmpty == true) 'search': search,
-            if (categoryId != null) 'categoryId': categoryId,
-            if (stockStatus != null) 'stockStatus': stockStatus,
+            'categoryId': ?categoryId,
+            'stockStatus': ?stockStatus,
           },
         )).data
         as Map,
