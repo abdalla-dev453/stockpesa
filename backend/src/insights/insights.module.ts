@@ -68,10 +68,28 @@ class ReportsController {
     } });
     return { recorded: true, id: audit.id };
   }
-  @Get("dashboard") @Roles("OWNER", "MANAGER", "CASHIER") async dashboard(@Me() u) {
-    const [products, salesToday, salesMonth, stockCounts, unreadAlerts] = await Promise.all([
+  @Get("dashboard") @Roles("OWNER", "MANAGER", "CASHIER") async dashboard(@Me() u, @Query("period") period = "today", @Query("start_date") startText?: string, @Query("end_date") endText?: string) {
+    if (u.role === "CASHIER") period = "today";
+    const now = new Date();
+    const midnight = new Date(now); midnight.setHours(0, 0, 0, 0);
+    let start = midnight, end = new Date(now);
+    if (period === "yesterday") { start = new Date(midnight); start.setDate(start.getDate() - 1); end = new Date(midnight.getTime() - 1); }
+    else if (period === "last_7_days") { start = new Date(midnight); start.setDate(start.getDate() - 6); }
+    else if (period === "last_30_days") { start = new Date(midnight); start.setDate(start.getDate() - 29); }
+    else if (period === "this_month") start = new Date(now.getFullYear(), now.getMonth(), 1);
+    else if (period === "last_month") { start = new Date(now.getFullYear(), now.getMonth() - 1, 1); end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999); }
+    else if (period === "custom") {
+      start = startText ? new Date(startText) : midnight; end = endText ? new Date(endText) : now;
+      if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start > end) throw new BadRequestException("Invalid date range");
+    } else if (period !== "today") throw new BadRequestException("Unsupported dashboard period");
+    const duration = end.getTime() - start.getTime();
+    const previousStart = new Date(start.getTime() - duration - 1), previousEnd = new Date(start.getTime() - 1);
+    const saleWhere = { businessId: u.businessId, ...(u.role === "CASHIER" ? { userId: u.sub } : {}), saleDate: { gte: start, lte: end }, status: { notIn: ["void", "refunded"] } };
+    const [products, sales, previousSales, itemCount, salesMonth, stockCounts, unreadAlerts, payments, receivables, trend] = await Promise.all([
       this.db.product.count({ where: { businessId: u.businessId, deletedAt: null, active: true } }),
-      this.db.sale.aggregate({ where: { businessId: u.businessId, saleDate: { gte: new Date(new Date().setHours(0, 0, 0, 0)) }, status: { notIn: ["void", "refunded"] } }, _sum: { total: true }, _count: true }),
+      this.db.sale.aggregate({ where: saleWhere, _sum: { total: true, balanceDue: true }, _count: true }),
+      this.db.sale.aggregate({ where: { businessId: u.businessId, ...(u.role === "CASHIER" ? { userId: u.sub } : {}), saleDate: { gte: previousStart, lte: previousEnd }, status: { notIn: ["void", "refunded"] } }, _sum: { total: true }, _count: true }),
+      this.db.saleItem.aggregate({ where: { businessId: u.businessId, sale: saleWhere }, _sum: { stockQuantity: true } }),
       this.db.sale.aggregate({ where: { businessId: u.businessId, saleDate: { gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) }, status: { notIn: ["void", "refunded"] } }, _sum: { total: true }, _count: true }),
       this.db.$queryRaw<Array<{ lowStock: bigint; outOfStock: bigint }>>(Prisma.sql`
         SELECT COUNT(*) FILTER (WHERE COALESCE(s."quantity", 0) <= 0) AS "outOfStock",
@@ -83,10 +101,26 @@ class ReportsController {
       // applied the optional per-user notification migration. The dashboard
       // only needs the existing business-wide unread count.
       this.db.alert.count({ where: { businessId: u.businessId, read: false } }),
+      this.db.payment.groupBy({ by: ["method"], where: { businessId: u.businessId, ...(u.role === "CASHIER" ? { sale: { userId: u.sub } } : {}), status: "PAID", OR: [{ settledAt: { gte: start, lte: end } }, { settledAt: null, createdAt: { gte: start, lte: end } }] }, _sum: { amount: true } }),
+      this.db.customer.aggregate({ where: { businessId: u.businessId, deletedAt: null, balance: { gt: 0 } }, _sum: { balance: true }, _count: true }),
+      this.db.$queryRaw<Array<{ day: Date; sales: Prisma.Decimal; transactions: bigint }>>(Prisma.sql`
+        SELECT DATE(s."saleDate") AS day, COALESCE(SUM(s."total"), 0)::numeric AS sales, COUNT(*) AS transactions
+        FROM "Sale" s WHERE s."businessId" = ${u.businessId}::uuid AND (${u.role === "CASHIER" ? Prisma.sql`s."userId" = ${u.sub}::uuid` : Prisma.sql`TRUE`}) AND s."saleDate" >= ${start} AND s."saleDate" <= ${end} AND s."status" NOT IN ('void','refunded')
+        GROUP BY DATE(s."saleDate") ORDER BY day ASC`),
     ]);
     const lowStock = Number(stockCounts[0]?.lowStock ?? 0);
     const outOfStock = Number(stockCounts[0]?.outOfStock ?? 0);
-    return { productCount: products, salesToday: Number(salesToday._sum.total ?? 0), saleCountToday: salesToday._count, salesMonth: Number(salesMonth._sum.total ?? 0), saleCountMonth: salesMonth._count, lowStock, outOfStock, unreadAlerts };
+    const total = Number(sales._sum.total ?? 0), previous = Number(previousSales._sum.total ?? 0);
+    const cashier = u.role === "CASHIER";
+    return { period, startDate: start.toISOString(), endDate: end.toISOString(), productCount: products,
+      salesToday: total, sales: total, saleCountToday: sales._count, saleCount: sales._count,
+      itemsSold: Number(itemCount._sum.stockQuantity ?? 0), previousSales: previous,
+      changePercent: previous === 0 ? null : Math.round((total - previous) / previous * 1000) / 10,
+      salesMonth: Number(salesMonth._sum.total ?? 0), saleCountMonth: salesMonth._count,
+      lowStock, outOfStock, unreadAlerts,
+      trend: trend.map((r) => ({ date: r.day, sales: Number(r.sales), transactions: Number(r.transactions) })),
+      paymentMethods: payments.map((r) => ({ method: r.method, amount: Number(r._sum.amount ?? 0) })),
+      ...(cashier ? {} : { outstandingCustomerDebt: Number(receivables._sum.balance ?? 0), indebtedCustomers: receivables._count, balanceDue: Number(sales._sum.balanceDue ?? 0) }) };
   }
   @Get("market-insights") @Roles("OWNER", "MANAGER") async marketInsights(@Me() u, @Query("days") daysText?: string) {
     const days = Number(daysText) === 7 ? 7 : 30;
@@ -100,51 +134,69 @@ class ReportsController {
           AND s."status" NOT IN ('void', 'refunded')
         GROUP BY DATE(s."saleDate") ORDER BY day ASC
       `),
-      this.db.$queryRaw<Array<{ id: string; name: string; quantity: Prisma.Decimal; revenue: Prisma.Decimal }>>(Prisma.sql`
-        SELECT p."id", p."name",
-          COALESCE(SUM(GREATEST(si."quantity" - si."returnedQty", 0)), 0)::numeric AS quantity,
-          COALESCE(SUM(si."lineTotal"), 0)::numeric AS revenue
+      this.db.$queryRaw<Array<{ productId: string; variantId: string | null; name: string; variantName: string | null; unit: string; quantity: Prisma.Decimal; revenue: Prisma.Decimal }>>(Prisma.sql`
+        SELECT p."id" AS "productId", v."id" AS "variantId", p."name", v."name" AS "variantName", COALESCE(v."unit", p."unit") AS "unit",
+          COALESCE(SUM(CASE WHEN si."quantity" > 0 THEN si."stockQuantity" * GREATEST(si."quantity" - si."returnedQty", 0) / si."quantity" ELSE 0 END), 0)::numeric AS quantity,
+          COALESCE(SUM(CASE WHEN si."quantity" > 0 THEN
+            si."lineTotal" * GREATEST(si."quantity" - si."returnedQty", 0) / si."quantity"
+            - CASE WHEN s."subtotal" > 0 THEN s."discount" * si."lineTotal" * GREATEST(si."quantity" - si."returnedQty", 0) / si."quantity" / s."subtotal" ELSE 0 END
+            ELSE 0 END), 0)::numeric AS revenue
         FROM "Product" p JOIN "SaleItem" si ON si."productId" = p."id"
         JOIN "Sale" s ON s."id" = si."saleId"
+        LEFT JOIN "ProductVariant" v ON v."id" = si."variantId"
         WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL
           AND s."saleDate" >= ${since} AND s."status" NOT IN ('void', 'refunded')
-        GROUP BY p."id", p."name" ORDER BY quantity DESC LIMIT 5
+        GROUP BY p."id", v."id", p."name", v."name", COALESCE(v."unit", p."unit") ORDER BY quantity DESC LIMIT 5
       `),
-      this.db.$queryRaw<Array<{ id: string; name: string; quantity: Prisma.Decimal; onHand: Prisma.Decimal }>>(Prisma.sql`
+      this.db.$queryRaw<Array<{ productId: string; variantId: string | null; name: string; variantName: string | null; unit: string; quantity: Prisma.Decimal; onHand: Prisma.Decimal }>>(Prisma.sql`
         WITH velocity AS (
-          SELECT si."productId", SUM(GREATEST(si."quantity" - si."returnedQty", 0))::numeric AS quantity
+          SELECT si."productId", si."variantId", SUM(CASE WHEN si."quantity" > 0 THEN si."stockQuantity" * GREATEST(si."quantity" - si."returnedQty", 0) / si."quantity" ELSE 0 END)::numeric AS quantity
           FROM "SaleItem" si JOIN "Sale" s ON s."id" = si."saleId"
           WHERE s."businessId" = ${u.businessId}::uuid AND s."saleDate" >= ${since}
-            AND s."status" NOT IN ('void', 'refunded') GROUP BY si."productId"
+            AND s."status" NOT IN ('void', 'refunded') GROUP BY si."productId", si."variantId"
         )
-        SELECT p."id", p."name", COALESCE(v.quantity, 0)::numeric AS quantity,
-          COALESCE(sl."quantity", 0)::numeric AS "onHand"
-        FROM "Product" p LEFT JOIN "StockLevel" sl ON sl."productId" = p."id"
-        LEFT JOIN velocity v ON v."productId" = p."id"
+        SELECT p."id" AS "productId", pv."id" AS "variantId", p."name", pv."name" AS "variantName", COALESCE(pv."unit", p."unit") AS "unit",
+          COALESCE(v.quantity, 0)::numeric AS quantity, COALESCE(pv."quantity", sl."quantity", 0)::numeric AS "onHand"
+        FROM "Product" p
+        LEFT JOIN "ProductVariant" pv ON pv."productId" = p."id" AND pv."deletedAt" IS NULL AND pv."active" = true
+        LEFT JOIN "StockLevel" sl ON sl."productId" = p."id" AND pv."id" IS NULL
+        LEFT JOIN velocity v ON v."productId" = p."id" AND v."variantId" IS NOT DISTINCT FROM pv."id"
         WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
-        ORDER BY v.quantity ASC NULLS FIRST, p."name" ASC LIMIT 5
+        ORDER BY v.quantity ASC NULLS FIRST, p."name" ASC, pv."name" ASC LIMIT 5
       `),
       this.db.$queryRaw<Array<{ total: bigint; healthy: bigint }>>(Prisma.sql`
+        WITH tracked AS (
+          SELECT COALESCE(sl."quantity", 0)::numeric AS quantity, p."minStock" AS "minStock"
+          FROM "Product" p LEFT JOIN "StockLevel" sl ON sl."productId" = p."id"
+          WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
+            AND NOT EXISTS (SELECT 1 FROM "ProductVariant" v WHERE v."productId" = p."id" AND v."deletedAt" IS NULL)
+          UNION ALL
+          SELECT v."quantity"::numeric AS quantity, v."minStock" AS "minStock"
+          FROM "ProductVariant" v JOIN "Product" p ON p."id" = v."productId"
+          WHERE v."businessId" = ${u.businessId}::uuid AND v."deletedAt" IS NULL
+            AND p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
+        )
         SELECT COUNT(*) AS total,
-          COUNT(*) FILTER (WHERE COALESCE(sl."quantity", 0) > p."minStock") AS healthy
-        FROM "Product" p LEFT JOIN "StockLevel" sl ON sl."productId" = p."id"
-        WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
+          COUNT(*) FILTER (WHERE quantity > "minStock") AS healthy
+        FROM tracked
       `),
-      this.db.$queryRaw<Array<{ id: string; name: string; onHand: Prisma.Decimal; daily: Prisma.Decimal }>>(Prisma.sql`
+      this.db.$queryRaw<Array<{ productId: string; variantId: string | null; name: string; variantName: string | null; unit: string; onHand: Prisma.Decimal; daily: Prisma.Decimal }>>(Prisma.sql`
         WITH velocity AS (
-          SELECT si."productId", SUM(GREATEST(si."quantity" - si."returnedQty", 0))::numeric AS quantity
+          SELECT si."productId", si."variantId", SUM(CASE WHEN si."quantity" > 0 THEN si."stockQuantity" * GREATEST(si."quantity" - si."returnedQty", 0) / si."quantity" ELSE 0 END)::numeric AS quantity
           FROM "SaleItem" si JOIN "Sale" s ON s."id" = si."saleId"
           WHERE s."businessId" = ${u.businessId}::uuid AND s."saleDate" >= ${since}
-            AND s."status" NOT IN ('void', 'refunded') GROUP BY si."productId"
+            AND s."status" NOT IN ('void', 'refunded') GROUP BY si."productId", si."variantId"
         )
-        SELECT p."id", p."name", COALESCE(sl."quantity", 0)::numeric AS "onHand",
+        SELECT p."id" AS "productId", pv."id" AS "variantId", p."name", pv."name" AS "variantName", COALESCE(pv."unit", p."unit") AS "unit", COALESCE(pv."quantity", sl."quantity", 0)::numeric AS "onHand",
           (v.quantity / ${days}::numeric)::numeric AS daily
-        FROM "Product" p LEFT JOIN "StockLevel" sl ON sl."productId" = p."id"
-        JOIN velocity v ON v."productId" = p."id"
+        FROM "Product" p
+        LEFT JOIN "ProductVariant" pv ON pv."productId" = p."id" AND pv."deletedAt" IS NULL AND pv."active" = true
+        LEFT JOIN "StockLevel" sl ON sl."productId" = p."id" AND pv."id" IS NULL
+        JOIN velocity v ON v."productId" = p."id" AND v."variantId" IS NOT DISTINCT FROM pv."id"
         WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
           AND v.quantity > 0
-          AND COALESCE(sl."quantity", 0) / (v.quantity / ${days}::numeric) <= 14
-        ORDER BY COALESCE(sl."quantity", 0) / (v.quantity / ${days}::numeric) ASC LIMIT 10
+          AND COALESCE(pv."quantity", sl."quantity", 0) / (v.quantity / ${days}::numeric) <= 14
+        ORDER BY COALESCE(pv."quantity", sl."quantity", 0) / (v.quantity / ${days}::numeric) ASC LIMIT 10
       `),
     ]);
     const total = Number(stockHealth[0]?.total ?? 0);
@@ -152,9 +204,9 @@ class ReportsController {
       source: "This business's recorded sales and stock only",
       days,
       trend: trend.map((r) => ({ date: r.day, sales: Number(r.sales), transactions: Number(r.transactions) })),
-      bestSellers: bestSellers.map((r) => ({ id: r.id, name: r.name, quantitySold: Number(r.quantity), revenue: Number(r.revenue) })),
-      slowMoving: slowMoving.map((r) => ({ id: r.id, name: r.name, quantitySold: Number(r.quantity), onHand: Number(r.onHand) })),
-      runningOut: runningOut.map((r) => ({ id: r.id, name: r.name, onHand: Number(r.onHand), estimatedDaysRemaining: Math.ceil(Number(r.onHand) / Number(r.daily)) })),
+      bestSellers: bestSellers.map((r) => ({ id: r.variantId ?? r.productId, productId: r.productId, variantId: r.variantId, name: r.variantName ? `${r.name} · ${r.variantName}` : r.name, unit: r.unit, quantitySold: Number(r.quantity), revenue: Number(r.revenue) })),
+      slowMoving: slowMoving.map((r) => ({ id: r.variantId ?? r.productId, productId: r.productId, variantId: r.variantId, name: r.variantName ? `${r.name} · ${r.variantName}` : r.name, unit: r.unit, quantitySold: Number(r.quantity), onHand: Number(r.onHand) })),
+      runningOut: runningOut.map((r) => ({ id: r.variantId ?? r.productId, productId: r.productId, variantId: r.variantId, name: r.variantName ? `${r.name} · ${r.variantName}` : r.name, unit: r.unit, onHand: Number(r.onHand), estimatedDaysRemaining: Math.ceil(Number(r.onHand) / Number(r.daily)) })),
       stockHealth: total ? Math.round(Number(stockHealth[0].healthy) / total * 100) : null,
       note: "Run-out timing is an estimate from the selected period's average sales velocity, not a guarantee."
     };
@@ -215,20 +267,23 @@ class ReportsController {
     return { total: Number(summary._sum.balance ?? 0), customers, meta: { page, limit, total: count, totalPages: Math.ceil(count / limit) } };
   }
   @Get("products") @Roles("OWNER", "MANAGER") async products(@Me() u) {
-    const rows = await this.db.$queryRaw<Array<{ id: string; name: string; sku: string | null; quantitySold: Prisma.Decimal; revenue: Prisma.Decimal; transactions: bigint }>>(Prisma.sql`
-      SELECT p."id", p."name", p."sku",
-        COALESCE(SUM(GREATEST(si."quantity" - si."returnedQty", 0)), 0)::numeric AS "quantitySold",
+    const rows = await this.db.$queryRaw<Array<{ id: string; variantId: string | null; name: string; variantName: string | null; sku: string | null; unit: string; quantitySold: Prisma.Decimal; revenue: Prisma.Decimal; transactions: bigint }>>(Prisma.sql`
+      SELECT p."id", v."id" AS "variantId", p."name", v."name" AS "variantName", COALESCE(v."sku", p."sku") AS "sku", COALESCE(v."unit", p."unit") AS "unit",
+        COALESCE(SUM(CASE WHEN si."quantity" > 0 THEN si."stockQuantity" * GREATEST(si."quantity" - si."returnedQty", 0) / si."quantity" ELSE 0 END), 0)::numeric AS "quantitySold",
         COALESCE(SUM(CASE WHEN si."quantity" > 0 THEN si."lineTotal" * GREATEST(si."quantity" - si."returnedQty", 0) / si."quantity" ELSE 0 END
           - CASE WHEN s."subtotal" > 0 THEN s."discount" * (CASE WHEN si."quantity" > 0 THEN si."lineTotal" * GREATEST(si."quantity" - si."returnedQty", 0) / si."quantity" ELSE 0 END) / s."subtotal" ELSE 0 END), 0)::numeric AS revenue,
         COUNT(DISTINCT si."saleId") AS transactions
       FROM "SaleItem" si JOIN "Sale" s ON s."id" = si."saleId"
       JOIN "Product" p ON p."id" = si."productId"
+      LEFT JOIN "ProductVariant" v ON v."id" = si."variantId"
       WHERE si."businessId" = ${u.businessId}::uuid AND s."status" NOT IN ('void', 'refunded')
-      GROUP BY p."id", p."name", p."sku"
+      GROUP BY p."id", v."id", p."name", v."name", COALESCE(v."sku", p."sku"), COALESCE(v."unit", p."unit")
       ORDER BY "quantitySold" DESC LIMIT 100
     `);
     return rows.map((row) => ({
-      product: { id: row.id, name: row.name, sku: row.sku },
+      product: { id: row.id, name: row.variantName ? `${row.name} · ${row.variantName}` : row.name, sku: row.sku, unit: row.unit },
+      productId: row.id,
+      variantId: row.variantId,
       quantitySold: Number(row.quantitySold),
       revenue: Number(row.revenue),
       transactions: Number(row.transactions),
@@ -236,13 +291,23 @@ class ReportsController {
   }
   @Get("stock-summary") @Roles("OWNER", "MANAGER") async stockSummary(@Me() u) {
     const [row] = await this.db.$queryRaw<Array<{ totalProducts: bigint; stockValue: Prisma.Decimal; retailValue: Prisma.Decimal; lowStock: bigint; outOfStock: bigint }>>(Prisma.sql`
+      WITH tracked AS (
+        SELECT COALESCE(s."quantity", 0)::numeric AS quantity, p."buyingPrice", p."sellingPrice", p."minStock"
+        FROM "Product" p LEFT JOIN "StockLevel" s ON s."productId" = p."id"
+        WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
+          AND NOT EXISTS (SELECT 1 FROM "ProductVariant" v WHERE v."productId" = p."id" AND v."deletedAt" IS NULL)
+        UNION ALL
+        SELECT v."quantity"::numeric AS quantity, v."buyingPrice", v."sellingPrice", v."minStock"
+        FROM "ProductVariant" v JOIN "Product" p ON p."id" = v."productId"
+        WHERE v."businessId" = ${u.businessId}::uuid AND v."deletedAt" IS NULL
+          AND p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
+      )
       SELECT COUNT(*) AS "totalProducts",
-        COALESCE(SUM(COALESCE(s."quantity", 0) * p."buyingPrice"), 0)::numeric AS "stockValue",
-        COALESCE(SUM(COALESCE(s."quantity", 0) * p."sellingPrice"), 0)::numeric AS "retailValue",
-        COUNT(*) FILTER (WHERE COALESCE(s."quantity", 0) > 0 AND COALESCE(s."quantity", 0) <= p."minStock") AS "lowStock",
-        COUNT(*) FILTER (WHERE COALESCE(s."quantity", 0) <= 0) AS "outOfStock"
-      FROM "Product" p LEFT JOIN "StockLevel" s ON s."productId" = p."id"
-      WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
+        COALESCE(SUM(quantity * "buyingPrice"), 0)::numeric AS "stockValue",
+        COALESCE(SUM(quantity * "sellingPrice"), 0)::numeric AS "retailValue",
+        COUNT(*) FILTER (WHERE quantity > 0 AND quantity <= "minStock") AS "lowStock",
+        COUNT(*) FILTER (WHERE quantity <= 0) AS "outOfStock"
+      FROM tracked
     `);
     const stockValue = Number(row.stockValue), retailValue = Number(row.retailValue);
     return {
@@ -254,27 +319,31 @@ class ReportsController {
   @Get("low-stock") @Roles("OWNER", "MANAGER", "STOREKEEPER") async lowStock(@Me() u, @Query("page") pageText?: string, @Query("limit") limitText?: string) {
     const page = Math.max(1, Number(pageText) || 1);
     const limit = Math.min(100, Math.max(1, Number(limitText) || 100));
+    const tracked = Prisma.sql`WITH tracked AS (
+      SELECT p."id", p."id" AS "productId", NULL::uuid AS "variantId", p."name", p."sku", p."unit", p."minStock",
+        COALESCE(s."quantity", 0)::numeric AS quantity
+      FROM "Product" p LEFT JOIN "StockLevel" s ON s."productId" = p."id"
+      WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
+        AND NOT EXISTS (SELECT 1 FROM "ProductVariant" v WHERE v."productId" = p."id" AND v."deletedAt" IS NULL)
+      UNION ALL
+      SELECT v."id", p."id" AS "productId", v."id" AS "variantId", p."name" || ' · ' || v."name" AS "name", v."sku", v."unit", v."minStock",
+        v."quantity"::numeric AS quantity
+      FROM "ProductVariant" v JOIN "Product" p ON p."id" = v."productId"
+      WHERE v."businessId" = ${u.businessId}::uuid AND v."deletedAt" IS NULL AND v."active" = true
+        AND p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
+    )`;
     const [count, matches] = await Promise.all([
-      this.db.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
-        SELECT COUNT(*) AS count FROM "Product" p LEFT JOIN "StockLevel" s ON s."productId" = p."id"
-        WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
-          AND COALESCE(s."quantity", 0) <= p."minStock"
-      `),
-      this.db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-        SELECT p."id" FROM "Product" p LEFT JOIN "StockLevel" s ON s."productId" = p."id"
-        WHERE p."businessId" = ${u.businessId}::uuid AND p."deletedAt" IS NULL AND p."active" = true
-          AND COALESCE(s."quantity", 0) <= p."minStock"
-        ORDER BY p."name" ASC LIMIT ${limit} OFFSET ${(page - 1) * limit}
+      this.db.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`${tracked} SELECT COUNT(*) AS count FROM tracked WHERE quantity <= "minStock"`),
+      this.db.$queryRaw<Array<{ id: string; productId: string; variantId: string | null; name: string; sku: string | null; unit: string; minStock: Prisma.Decimal; quantity: Prisma.Decimal }>>(Prisma.sql`${tracked}
+        SELECT * FROM tracked WHERE quantity <= "minStock" ORDER BY "name" ASC LIMIT ${limit} OFFSET ${(page - 1) * limit}
       `),
     ]);
-    const rows = matches.length ? await this.db.product.findMany({ where: { id: { in: matches.map((row) => row.id) }, businessId: u.businessId }, include: { stock: true, category: true } }) : [];
-    const byId = new Map(rows.map((row) => [row.id, row]));
-    const data = matches.flatMap(({ id }) => {
-      const product = byId.get(id);
-      if (!product) return [];
-      const quantity = Number(product.stock?.quantity ?? 0);
-      return [{ ...product, quantity, suggestedReorder: Math.max(Number(product.minStock) * 2 - quantity, 0) }];
-    });
+    const data = matches.map((row) => ({
+      id: row.id, productId: row.productId, variantId: row.variantId,
+      name: row.name, sku: row.sku, unit: row.unit,
+      quantity: Number(row.quantity), minStock: Number(row.minStock),
+      suggestedReorder: Math.max(Number(row.minStock) * 2 - Number(row.quantity), 0),
+    }));
     const total = Number(count[0]?.count ?? 0);
     return { data, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
   }
