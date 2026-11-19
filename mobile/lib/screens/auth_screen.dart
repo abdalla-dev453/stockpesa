@@ -97,18 +97,13 @@ class _AuthScreenState extends State<AuthScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Container(
-                    width: 68,
-                    height: 68,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: C.emerald,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Icon(
-                      Icons.inventory_2,
-                      color: Colors.white,
-                      size: 34,
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Image.asset(
+                      'assets/branding/stockpesa-icon-96.png',
+                      width: 64,
+                      height: 64,
+                      semanticLabel: 'StockPesa logo',
                     ),
                   ),
                   const SizedBox(height: 24),

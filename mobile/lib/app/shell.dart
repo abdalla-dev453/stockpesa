@@ -113,9 +113,21 @@ class StockPesaShell extends ConsumerWidget {
       appBar: childHasAppBar
           ? null
           : AppBar(
-              title: Text(
-                title,
-                style: const TextStyle(fontWeight: FontWeight.w800),
+              title: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Image.asset(
+                    'assets/branding/stockpesa-icon-48.png',
+                    width: 28,
+                    height: 28,
+                    semanticLabel: 'StockPesa',
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ],
               ),
               actions: [
                 Semantics(

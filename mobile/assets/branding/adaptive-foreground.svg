@@ -1,4 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" role="img" aria-labelledby="title desc">
-  <title id="title">StockPesa adaptive icon foreground</title><desc id="desc">Inventory box with growth line, centered inside the Android safe zone.</desc>
-  <path fill="#fff" d="m54 14 34 19v36L54 88 20 69V33z"/><path fill="#E7F1EA" d="M54 14v74L20 69V33z"/><path fill="#0B7A4B" d="m34 39 20 11 20-11v13L54 64 34 52z"/><path fill="none" stroke="#F5A524" stroke-linecap="round" stroke-linejoin="round" stroke-width="5" d="m43 65 8 5 16-11"/>
+  <title id="title">StockPesa adaptive icon foreground</title>
+  <desc id="desc">Stacked inventory shelf with upward growth arrow and discreet currency cue.</desc>
+  <rect x="22.5" y="22.5" width="63" height="63" rx="11.25" fill="#0B7A4B"/>
+  <rect x="29.25" y="42.75" width="49.5" height="4.5" rx="2.25" fill="#F7F8F7"/>
+  <rect x="29.25" y="60.75" width="49.5" height="4.5" rx="2.25" fill="#F7F8F7"/>
+  <path fill="none" stroke="#F5A524" stroke-linecap="round" stroke-linejoin="round" stroke-width="6.75" d="M69.75 69.75 83.25 56.25 94.5 69.75"/>
+  <rect x="82.125" y="73.125" width="2.25" height="6.75" rx="1.125" fill="#F5A524"/>
 </svg>
