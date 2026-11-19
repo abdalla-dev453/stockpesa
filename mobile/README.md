@@ -13,9 +13,9 @@ flutter run --dart-define=API=http://10.0.2.2:3000
 
 Use a Flutter release that includes Dart 3.10 or newer and a Java 17+ JDK for Android builds.
 
-`10.0.2.2` reaches the host machine from an Android emulator. Use `http://localhost:3000` for an iOS simulator, or the development computer's LAN address for a physical phone. Start the API and PostgreSQL from the repository root with `docker compose up --build`.
+The app chooses `http://10.0.2.2:3000` for Android emulators and `http://localhost:3000` for web, desktop, and iOS simulators. A physical phone must use the development computer's LAN address, for example `flutter run --dart-define=API=http://192.168.1.20:3000`; the phone and computer must be on the same network and the computer firewall must allow port 3000. Start the API and PostgreSQL from the repository root with `docker compose up --build`.
 
-The app defaults to the Android emulator API URL. Override it with `--dart-define=API=...`; do not commit live API credentials or production URLs. For production, provide an HTTPS URL through the same build define.
+Override the platform default with `--dart-define=API=...` when needed; do not commit live API credentials or production URLs. For production, provide an HTTPS URL through the same build define.
 Android permits cleartext HTTP only in the debug manifest for local API testing; release builds do not enable it.
 `.env.example` documents the development value; Flutter does not load that file automatically.
 

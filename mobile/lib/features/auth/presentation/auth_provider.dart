@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api.dart';
@@ -48,7 +50,7 @@ class SessionController extends Notifier<SessionState> {
       try {
         await currentUser();
         signedIn = true;
-        await StockPesaPushNotifications.instance.registerIfAlreadyAllowed();
+        unawaited(StockPesaPushNotifications.instance.registerIfAlreadyAllowed());
       } catch (_) {
         await logout();
       }
@@ -65,9 +67,8 @@ class SessionController extends Notifier<SessionState> {
   }
 
   Future<void> signedIn() async {
-    await currentUser();
-    await StockPesaPushNotifications.instance.registerIfAlreadyAllowed();
     state = state.copyWith(status: SessionStatus.signedIn);
+    unawaited(StockPesaPushNotifications.instance.registerIfAlreadyAllowed());
   }
 
   Future<void> signOut() async {

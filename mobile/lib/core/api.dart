@@ -1,19 +1,30 @@
 import 'package:dio/dio.dart';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'storage/cart_store.dart';
 
-const apiBase = String.fromEnvironment(
-  'API',
-  defaultValue: 'http://10.0.2.2:3000',
-); // Android emulator -> host
+const _configuredApi = String.fromEnvironment('API');
+String get apiBase {
+  if (_configuredApi.isNotEmpty) return _configuredApi;
+  if (kIsWeb) return 'http://localhost:3000';
+  return switch (defaultTargetPlatform) {
+    TargetPlatform.android => 'http://10.0.2.2:3000', // Android emulator -> host
+    _ => 'http://localhost:3000', // iOS simulator and desktop
+  };
+}
 final _store = const FlutterSecureStorage();
 Future<void>? _refreshFuture;
 final _sessionExpired = StreamController<void>.broadcast();
 Stream<void> get sessionExpiredStream => _sessionExpired.stream;
 final Dio dio = _createDio();
 
-Dio _createDio() => Dio(BaseOptions(baseUrl: apiBase))
+Dio _createDio() => Dio(BaseOptions(
+  baseUrl: apiBase,
+  connectTimeout: const Duration(seconds: 8),
+  sendTimeout: const Duration(seconds: 15),
+  receiveTimeout: const Duration(seconds: 15),
+))
   ..interceptors.add(
     InterceptorsWrapper(
       onRequest: (o, h) async {
@@ -57,7 +68,12 @@ Future<void> _refreshAccessToken() async {
   final refresh = await _store.read(key: 'refresh');
   if (refresh == null) throw StateError('No refresh token');
   final response = await Dio(
-    BaseOptions(baseUrl: apiBase),
+    BaseOptions(
+      baseUrl: apiBase,
+      connectTimeout: const Duration(seconds: 8),
+      sendTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 15),
+    ),
   ).post('/auth/refresh', data: {'refreshToken': refresh});
   await saveTokens(Map<String, dynamic>.from(response.data as Map));
 }
@@ -83,7 +99,7 @@ String apiError(Object error) {
       return message is List ? message.join('\n') : message.toString();
     }
     if (error.response == null) {
-      return 'Cannot reach StockPesa. Check your connection and API address.';
+      return 'Cannot reach the StockPesa API at $apiBase. Check that the API is running and that this address is reachable from this device.';
     }
   }
   return 'Something went wrong. Please try again.';
