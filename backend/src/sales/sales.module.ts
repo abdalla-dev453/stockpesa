@@ -40,6 +40,7 @@ import { planMpesaCheckout } from "../common/mpesa-checkout";
 class ItemDto {
   @IsOptional() @IsUUID() productId?: string;
   @IsOptional() @IsUUID() variantId?: string;
+  @IsOptional() @IsString() unit?: string;
   @IsNumber({ maxDecimalPlaces: 3 }) @Min(0.001) quantity: number;
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) discount?: number;
 }
@@ -88,11 +89,11 @@ class SalesController {
       const lines = [];
       for (const it of d.items) {
         const variant = it.variantId ? await tx.productVariant.findFirst({
-          where: { id: it.variantId, businessId: u.businessId, deletedAt: null, active: true, product: { deletedAt: null, active: true } },
+          where: { id: it.variantId, businessId: u.businessId, deletedAt: null, active: true, product: { deletedAt: null, active: true, status: "ACTIVE" } },
           include: { product: true },
         }) : null;
         const product: any = it.productId ? await tx.product.findFirst({
-          where: { id: it.productId, businessId: u.businessId, deletedAt: null, active: true },
+          where: { id: it.productId, businessId: u.businessId, deletedAt: null, active: true, status: "ACTIVE" },
           include: { stock: true, variants: { where: { deletedAt: null } } },
         }) : variant?.product ?? null;
         if (!product || (it.variantId && !variant)) throw new BadRequestException("Product not found");
@@ -110,6 +111,16 @@ class SalesController {
           }
         }
         const saleProduct: any = variant ?? product;
+        const enteredUnit = it.unit?.trim().toLowerCase() || saleProduct.unit;
+        let factor = 1;
+        if (enteredUnit !== saleProduct.unit) {
+          if (variant || bundleComponents.length) throw new BadRequestException("Unit conversion is unavailable for variants and bundles");
+          factor = await this.stock.conversionFactor(tx, u.businessId, product.id, enteredUnit, product.unit);
+        }
+        const rawStockQuantity = it.quantity * factor;
+        const stockQuantity = Math.round(rawStockQuantity * 1000) / 1000;
+        if (!Number.isFinite(stockQuantity) || Math.abs(rawStockQuantity - stockQuantity) > 1e-8)
+          throw new BadRequestException("Converted quantity must be precise to at most 3 decimal places");
         const avail = bundleComponents.length ? Infinity : Number(variant?.quantity ?? product.stock?.quantity ?? 0);
         const now = new Date();
         const promoPrice = saleProduct.promotionalPrice != null &&
@@ -118,8 +129,8 @@ class SalesController {
           ? saleProduct.promotionalPrice : null;
         const bundleCost = bundleComponents.reduce((sum, row) => sum + Number(row.component.buyingPrice) * Number(row.quantity), 0);
         const priced = { ...product, ...saleProduct, id: product.id, variantId: variant?.id, name: variant ? `${product.name} · ${variant.name}` : product.name,
-          sku: variant?.sku ?? product.sku, sellingPrice: promoPrice ?? saleProduct.sellingPrice, buyingPrice: bundleComponents.length ? bundleCost : saleProduct.buyingPrice };
-        if (it.quantity > avail) {
+          sku: variant?.sku ?? product.sku, sellingPrice: Math.round(Number(promoPrice ?? saleProduct.sellingPrice) * factor * 100) / 100, buyingPrice: bundleComponents.length ? bundleCost : Math.round(Number(saleProduct.buyingPrice) * factor * 100) / 100 };
+        if (stockQuantity > avail) {
           if (!["OWNER", "MANAGER"].includes(u.role))
             throw new ForbiddenException(`Only ${avail} of ${priced.name} in stock`);
           if (!d.overrideReason)
@@ -130,7 +141,7 @@ class SalesController {
         const lineCents = multiplyUnitCents(priced.sellingPrice, it.quantity) - cents(it.discount);
         if (lineCents < 0) throw new BadRequestException(`Discount exceeds the line total for ${priced.name}`);
         subtotalCents += lineCents;
-        lines.push({ p: priced, it, variant, bundleComponents, line: money(lineCents) });
+        lines.push({ p: priced, it, variant, bundleComponents, enteredUnit, stockQuantity, line: money(lineCents) });
       }
       const subtotal = money(subtotalCents);
       const totalCents = subtotalCents - cents(d.discount);
@@ -211,6 +222,8 @@ class SalesController {
               productId: l.p.id,
               ...(l.variant ? { variantId: l.variant.id } : {}),
               quantity: l.it.quantity,
+              unit: l.enteredUnit,
+              stockQuantity: l.stockQuantity,
               unitPrice: l.p.sellingPrice,
               unitCost: l.p.buyingPrice,
               discount: l.it.discount ?? 0,
@@ -231,15 +244,15 @@ class SalesController {
           });
         } else if (l.variant) {
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${u.businessId + ":variant:" + l.variant.id}))`;
-          const updated = await tx.productVariant.updateMany({ where: { id: l.variant.id, businessId: u.businessId, ...( !( ["OWNER", "MANAGER"].includes(u.role) && !!d.overrideReason) ? { quantity: { gte: l.it.quantity } } : {}) }, data: { quantity: { decrement: l.it.quantity } } });
+          const updated = await tx.productVariant.updateMany({ where: { id: l.variant.id, businessId: u.businessId, ...( !( ["OWNER", "MANAGER"].includes(u.role) && !!d.overrideReason) ? { quantity: { gte: l.stockQuantity } } : {}) }, data: { quantity: { decrement: l.stockQuantity } } });
           if (updated.count !== 1) throw new ForbiddenException(`Not enough ${l.p.name} in stock`);
-          await tx.variantStockMovement.create({ data: { businessId: u.businessId, variantId: l.variant.id, userId: u.sub, quantityChange: -l.it.quantity, reason: "sale", reference: sale.saleNumber } });
+          await tx.variantStockMovement.create({ data: { businessId: u.businessId, variantId: l.variant.id, userId: u.sub, quantityChange: -l.stockQuantity, reason: "sale", reference: sale.saleNumber } });
         } else await this.stock.move(tx, {
           businessId: u.businessId,
           userId: u.sub,
           productId: l.p.id,
           type: "sale_out",
-          change: -l.it.quantity,
+          change: -l.stockQuantity,
           reference: sale.saleNumber,
           allowNegative: ["OWNER", "MANAGER"].includes(u.role) && !!d.overrideReason,
           overrideReason: d.overrideReason,
@@ -294,7 +307,7 @@ class SalesController {
       const businessSnapshot = await tx.business.findUnique({ where: { id: u.businessId }, select: { name: true, phone: true, receiptFooter: true, currency: true } });
       const receipt = await tx.receipt.create({ data: {
         businessId: u.businessId, saleId: sale.id, receiptNumber: sale.saleNumber,
-        snapshot: { businessName: businessSnapshot?.name, businessPhone: businessSnapshot?.phone, receiptFooter: businessSnapshot?.receiptFooter, currency: businessSnapshot?.currency, saleNumber: sale.saleNumber, saleDate: sale.saleDate.toISOString(), subtotal, discount: d.discount ?? 0, tax: 0, total, amountPaid: confirmedPaid, balanceDue: Number(sale.balanceDue), method: d.method, paymentStatus: payment?.status ?? "CREDIT", items: lines.map((l, index) => ({ saleItemId: sale.items[index]?.id, name: l.p.name, sku: l.p.sku, quantity: l.it.quantity, unitPrice: Number(l.p.sellingPrice), lineDiscount: l.it.discount ?? 0, lineTotal: l.line })) },
+        snapshot: { businessName: businessSnapshot?.name, businessPhone: businessSnapshot?.phone, receiptFooter: businessSnapshot?.receiptFooter, currency: businessSnapshot?.currency, saleNumber: sale.saleNumber, saleDate: sale.saleDate.toISOString(), subtotal, discount: d.discount ?? 0, tax: 0, total, amountPaid: confirmedPaid, balanceDue: Number(sale.balanceDue), method: d.method, paymentStatus: payment?.status ?? "CREDIT", items: lines.map((l, index) => ({ saleItemId: sale.items[index]?.id, name: l.p.name, sku: l.p.sku, quantity: l.it.quantity, unit: l.enteredUnit, unitPrice: Number(l.p.sellingPrice), lineDiscount: l.it.discount ?? 0, lineTotal: l.line })) },
       } });
       await tx.auditLog.create({ data: { businessId: u.businessId, userId: u.sub, action: sale.status === "completed" ? "sale.completed" : "sale.created", entity: "sale", entityId: sale.id, meta: { saleNumber: sale.saleNumber, total, amountPaid: confirmedPaid, balanceDue: Number(sale.balanceDue), receiptId: receipt.id, paymentId: payment?.id ?? null, ...(manualMpesa ? { mpesaReceiptNumber: d.mpesaReceiptNumber!.toUpperCase() } : {}) } } });
       return { ...sale, payments: payment ? [payment] : [] };
@@ -392,7 +405,10 @@ class SalesController {
           const components = await tx.bundleItem.findMany({ where: { businessId: u.businessId, bundleProductId: row.item.productId } });
           if (components.length) {
             for (const component of components) await this.stock.move(tx, { businessId: u.businessId, userId: u.sub, productId: component.componentId, type: "return_in", change: Number(component.quantity) * row.quantity, reason: d.reason, reference: sale.saleNumber });
-          } else await this.stock.move(tx, { businessId: u.businessId, userId: u.sub, productId: row.item.productId, type: "return_in", change: row.quantity, reason: d.reason, reference: sale.saleNumber });
+          } else {
+            const factor = Number(row.item.stockQuantity) / Number(row.item.quantity);
+            await this.stock.move(tx, { businessId: u.businessId, userId: u.sub, productId: row.item.productId, type: "return_in", change: row.quantity * factor, reason: d.reason, reference: sale.saleNumber });
+          }
         }
       }
       await tx.sale.update({ where: { id: sale.id }, data: { total: newTotal, amountPaid: newPaid, balanceDue: newBalance, status: allReturned ? "refunded" : "partially_returned" } });

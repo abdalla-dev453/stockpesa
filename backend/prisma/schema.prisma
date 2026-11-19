@@ -379,6 +379,8 @@ model SaleItem {
   productId   String          @db.Uuid
   variantId   String?         @db.Uuid
   quantity    Decimal         @db.Decimal(14, 3)
+  unit        String?
+  stockQuantity Decimal      @db.Decimal(14, 3)
   returnedQty Decimal         @default(0) @db.Decimal(14, 3)
   unitPrice   Decimal         @db.Decimal(14, 2)
   unitCost    Decimal         @db.Decimal(14, 2)

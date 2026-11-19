@@ -396,7 +396,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                 ? const Center(child: Text('No sales yet'))
                 : ListView.separated(
                     itemCount: rows.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (context, i) {
                       final s = rows[i] as Map;
                       return ListTile(
@@ -793,7 +793,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                       : ListView.separated(
                           padding: const EdgeInsets.only(bottom: 90),
                           itemCount: rows.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          separatorBuilder: (_, _) => const Divider(height: 1),
                           itemBuilder: (context, i) {
                             final c = rows[i] as Map;
                             final balance = numberValue(c['balance']);
@@ -1188,10 +1188,11 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                 );
                 if (c.mounted) Navigator.pop(c, true);
               } catch (e) {
-                if (c.mounted)
+                if (c.mounted) {
                   ScaffoldMessenger.of(
                     c,
                   ).showSnackBar(SnackBar(content: Text(apiError(e))));
+                }
               }
             },
             child: const Text('Save'),
@@ -1245,7 +1246,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
             child: ListView.separated(
               padding: const EdgeInsets.only(bottom: 90),
               itemCount: rows.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
+              separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (context, i) {
                 final c = rows[i] as Map;
                 return ListTile(
@@ -1506,7 +1507,7 @@ class _StaffScreenState extends State<StaffScreen> {
             child: ListView.separated(
               padding: const EdgeInsets.only(bottom: 90),
               itemCount: rows.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
+              separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (_, i) {
                 final u = rows[i] as Map;
                 return ListTile(
@@ -1659,8 +1660,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
           'to': DateTime.now().toIso8601String(),
         },
       );
-      if (mounted)
+      if (mounted) {
         _message('Report exported. Customer names and balances are included.');
+      }
     } catch (e) {
       if (mounted) _message(apiError(e));
     }
@@ -1773,7 +1775,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       dense: true,
                       title: Text(row['name']?.toString() ?? 'Product'),
                       subtitle: Text(
-                        'On hand ${row['quantity']} · reorder ${row['suggestedReorder']}',
+                        'On hand ${row['quantity']} ${row['unit'] ?? ''} · reorder ${row['suggestedReorder']}',
                       ),
                     ),
                   Text(
@@ -1811,7 +1813,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   final p = r as Map;
                   return ListTile(
                     title: Text(p['product']?['name'] ?? 'Product'),
-                    subtitle: Text('${p['quantitySold']} sold'),
+                    subtitle: Text('${p['quantitySold']} ${p['product']?['unit'] ?? 'units'} sold'),
                     trailing: Text(kes(numberValue(p['revenue']))),
                   );
                 }),
@@ -2032,7 +2034,7 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
             child: ListView.separated(
               padding: const EdgeInsets.only(bottom: 90),
               itemCount: rows.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
+              separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (context, i) {
                 final c = rows[i] as Map;
                 return ListTile(
@@ -2147,7 +2149,7 @@ class _CountDetailScreenState extends State<CountDetailScreen> {
         ? const Center(child: CircularProgressIndicator())
         : ListView.separated(
             itemCount: (data['items'] as List? ?? []).length,
-            separatorBuilder: (_, __) => const Divider(height: 1),
+            separatorBuilder: (_, _) => const Divider(height: 1),
             itemBuilder: (context, i) {
               final item = (data['items'] as List)[i] as Map;
               return ListTile(

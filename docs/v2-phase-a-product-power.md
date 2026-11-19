@@ -30,13 +30,20 @@ The migration is additive. Existing products remain non-variant sellable product
 | `GET` | `/product-tags` | Authenticated staff | List this business's tags |
 | `PUT` | `/products/:id/tags` | Owner or manager | Replace a product's tags with up to 20 names |
 | `PATCH` | `/products/:id` | Owner or manager | Change status and promotional pricing; price changes are recorded |
-| `POST` | `/sales` | Owner, manager, cashier | Each item accepts exactly one of `productId` or `variantId`; active promotions apply automatically |
+| `POST` | `/stock/intake` | Owner, manager, storekeeper | Optional `unit` converts received quantity and cost to the product stock unit |
+| `POST` | `/sales` | Owner, manager, cashier | Each item accepts exactly one of `productId` or `variantId`; regular product items accept `unit`; active promotions apply automatically |
 
 Product search and existing pagination continue on `/products`. Barcode and SKU lookup now checks variants as well as products.
 
 The product list also accepts `brand`, `tag`, `status`, `priceMin`, and `priceMax` filters in addition to its existing `search`, `categoryId`, and `stockStatus` parameters.
 
 ### Example variant sale
+
+Product stock intake accepts an optional `unit`, and sale items accept the same field. For a product stocked in pieces, a `carton` → `piece` rule with multiplier `24` lets a shop receive or sell cartons. The server converts to the stock unit before validating or changing inventory; sale rows and receipts retain the entered unit and quantity. Variant and bundle sales use their configured unit.
+
+```json
+{ "productId": "<product-uuid>", "quantity": 2, "unit": "carton", "unitCost": 2400 }
+```
 
 ```json
 {
@@ -61,12 +68,14 @@ The product list also accepts `brand`, `tag`, `status`, `priceMin`, and `priceMa
 
 - **Products list:** existing search, category, stock filters, and add flow.
 - **Product details:** status and promotion summary, variants, stock receipt by variant, image URL entries, bundle contents, price history, and existing stock movements.
-- **Sell:** selecting a product with variants prompts for the option; barcode lookup adds a matched variant directly.
-- **Checkout:** submits `productId` for a regular item and `variantId` for a variant; the cart remains saved as before.
+- **Sell:** selecting a product with active variants prompts for an option; barcode lookup adds a matched variant directly. Products with conversion rules offer a selling-unit choice.
+- **Stock:** receiving a product with conversion rules offers a receiving-unit choice and labels the entered-unit cost.
+- **Checkout:** submits `productId` for a regular item, `variantId` for a variant, and the selected `unit` where applicable; receipts retain the entered quantity and unit.
+- **Reports:** sold quantities, run-out velocity, and stock valuation use each sellable item's stock unit, including variants.
 
 ## Verification and demo
 
-Run `cd backend && npm test`, `cd mobile && dart analyze lib test`, and apply migrations to a disposable PostgreSQL database before an end-to-end demo. The integration suite now covers the versioned alias, variant receipt and checkout, movement/idempotency, and bundle component deduction when `DATABASE_URL_TEST` points to a disposable database whose name contains `test`.
+Run `cd backend && npm test`, `cd mobile && dart analyze lib test`, and apply migrations to a disposable PostgreSQL database before an end-to-end demo. The integration suite covers the versioned alias, variant receipt and checkout, movement/idempotency, bundle component deduction, cross-unit receiving/sales/returns, product report units, role checks, and concurrent variant setup when `DATABASE_URL_TEST` points to a disposable database whose name contains `test`.
 
 Demo: open Cooking Oil 1L, receive its 500ml variant, scan the variant barcode in Sell and complete a sale; then sell the School Starter Pack and confirm exercise-book and pen quantities each fall by one. Show the price-history screen after changing a product price.
 
@@ -80,4 +89,4 @@ Demo: open Cooking Oil 1L, receive its 500ml variant, scan the variant barcode i
 
 ## Current scope boundary
 
-Image records currently store HTTPS URLs. Binary upload, automatic compression, camera/gallery selection, and client image caching need an image-storage provider and are not part of this slice. Unit conversion rules are validated and stored, but purchase receiving and checkout do not yet convert quantities between units. Those workflows need to use the rules in the purchasing and sales phases before merchants rely on cross-unit stock calculations.
+Image records currently store HTTPS URLs. Binary upload, automatic compression, camera/gallery selection, and persistent image caching remain out of scope until an image-storage provider and deployment storage policy are configured. Unit conversions now apply to stock intake and product sales; purchase orders and GRNs will build on this support in Phase B.

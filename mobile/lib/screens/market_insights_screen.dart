@@ -95,7 +95,7 @@ class _MarketInsightsScreenState extends State<MarketInsightsScreen> {
                   for (final p in best)
                     _row(
                       '${p['name']}',
-                      '${numberValue(p['quantitySold'])} sold',
+                      '${numberValue(p['quantitySold'])} ${p['unit'] ?? 'units'} sold',
                     ),
               ]),
               _section(context, 'Slow moving', [
@@ -105,7 +105,7 @@ class _MarketInsightsScreenState extends State<MarketInsightsScreen> {
                   for (final p in slow)
                     _row(
                       '${p['name']}',
-                      '${numberValue(p['quantitySold'])} sold · ${numberValue(p['onHand'])} on hand',
+                      '${numberValue(p['quantitySold'])} ${p['unit'] ?? 'units'} sold · ${numberValue(p['onHand'])} on hand',
                     ),
               ]),
               _section(context, 'May run out soon', [

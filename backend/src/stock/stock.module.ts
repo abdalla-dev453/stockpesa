@@ -23,6 +23,7 @@ class IntakeDto {
   @IsNumber({ maxDecimalPlaces: 3 }) @Min(0.001) quantity: number;
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) unitCost: number;
   @IsOptional() @IsString() supplier?: string;
+  @IsOptional() @IsString() unit?: string;
   @IsOptional() @IsString() reference?: string;
   @IsOptional() @IsString() notes?: string;
 }
@@ -154,6 +155,30 @@ export class StockService {
     }
     return lvl;
   }
+
+  /** Convert an entered unit to the product's stock unit using a tenant-owned rule. */
+  async conversionFactor(tx: any, businessId: string, productId: string, fromUnit: string, toUnit: string) {
+    const from = fromUnit.trim().toLowerCase(), to = toUnit.trim().toLowerCase();
+    if (from === to) return 1;
+    const rows = await tx.unitConversion.findMany({
+      where: {
+        businessId,
+        AND: [
+          { OR: [{ productId }, { productId: null }] },
+          { OR: [{ fromUnit: from, toUnit: to }, { fromUnit: to, toUnit: from }] },
+        ],
+      },
+    });
+    const scoped = rows.filter((row: any) => row.productId === productId);
+    const global = rows.filter((row: any) => row.productId == null);
+    const direct = scoped.find((row: any) => row.fromUnit === from && row.toUnit === to)
+      ?? global.find((row: any) => row.fromUnit === from && row.toUnit === to);
+    if (direct) return Number(direct.multiplier);
+    const reverse = scoped.find((row: any) => row.fromUnit === to && row.toUnit === from)
+      ?? global.find((row: any) => row.fromUnit === to && row.toUnit === from);
+    if (reverse) return 1 / Number(reverse.multiplier);
+    throw new BadRequestException(`No unit conversion is set from ${fromUnit} to ${toUnit}`);
+  }
 }
 @Controller("stock")
 @UseGuards(AuthGuard)
@@ -186,25 +211,56 @@ class StockController {
   }
   @Post("intake")
   @Roles("OWNER", "MANAGER", "STOREKEEPER")
-  intake(@Me() u, @Body() d: IntakeDto, @Headers("idempotency-key") key?: string) {
+  async intake(@Me() u, @Body() d: IntakeDto, @Headers("idempotency-key") key?: string) {
     if (d.quantity <= 0)
       throw new BadRequestException("Quantity must be more than 0");
     if (!Number.isFinite(d.unitCost) || d.unitCost < 0)
       throw new BadRequestException("Unit cost must be zero or more");
+    const existingProduct = await this.db.product.findFirst({ where: { id: d.productId, businessId: u.businessId, deletedAt: null } });
+    if (!existingProduct) throw new NotFoundException("Product not found");
+    const inputUnit = d.unit?.trim().toLowerCase() || existingProduct.unit;
+    const factor = await this.s.conversionFactor(this.db, u.businessId, existingProduct.id, inputUnit, existingProduct.unit);
+    const rawConvertedQuantity = d.quantity * factor;
+    const convertedQuantity = Math.round(rawConvertedQuantity * 1000) / 1000;
+    if (Math.abs(rawConvertedQuantity - convertedQuantity) > 1e-8)
+      throw new BadRequestException("Converted quantity must be precise to at most 3 decimal places");
+    const convertedCost = Math.round((d.unitCost / factor) * 100) / 100;
     return this.s.run(u, key, async (tx) => {
+      const product = await tx.product.findFirst({ where: { id: d.productId, businessId: u.businessId, deletedAt: null } });
+      if (!product) throw new NotFoundException("Product not found");
+      const enteredUnit = d.unit?.trim().toLowerCase() || product.unit;
+      const transactionFactor = await this.s.conversionFactor(tx, u.businessId, product.id, enteredUnit, product.unit);
+      if (Math.abs(transactionFactor - factor) > 1e-8)
+        throw new ConflictException("Unit conversion changed; retry the stock intake");
+      const quantity = convertedQuantity;
+      const unitCost = convertedCost;
       const result = await this.s.move(tx, {
         businessId: u.businessId,
         userId: u.sub,
         productId: d.productId,
         type: "purchase_in",
-        change: d.quantity,
-        unitCost: d.unitCost,
+        change: quantity,
+        unitCost,
         supplier: d.supplier,
         reference: d.reference,
         notes: d.notes,
         idempotencyKey: key,
       });
-      await tx.product.update({ where: { id: d.productId }, data: { buyingPrice: d.unitCost } });
+      await tx.product.update({ where: { id: d.productId }, data: { buyingPrice: unitCost } });
+      if (Number(product.buyingPrice) !== unitCost) {
+        await tx.productPriceHistory.create({ data: {
+          businessId: u.businessId,
+          productId: d.productId,
+          userId: u.sub,
+          oldBuyingPrice: product.buyingPrice,
+          oldSellingPrice: product.sellingPrice,
+          oldWholesalePrice: product.wholesalePrice,
+          buyingPrice: unitCost,
+          sellingPrice: product.sellingPrice,
+          wholesalePrice: product.wholesalePrice,
+          reason: "Cost price updated during stock intake",
+        } });
+      }
       await tx.auditLog.create({ data: {
         businessId: u.businessId,
         userId: u.sub,
@@ -213,14 +269,17 @@ class StockController {
         entityId: d.productId,
         meta: {
           quantity: d.quantity,
+          unit: enteredUnit,
+          stockQuantity: quantity,
           unitCost: d.unitCost,
+          stockUnitCost: unitCost,
           supplier: d.supplier ?? null,
           reference: d.reference ?? null,
           notes: d.notes ?? null,
         },
       } });
       return result;
-    }, { productId: d.productId, type: "purchase_in", quantity: d.quantity, unitCost: d.unitCost, supplier: d.supplier, reference: d.reference, notes: d.notes, reason: undefined });
+    }, { productId: d.productId, type: "purchase_in", quantity: convertedQuantity, unitCost: convertedCost, supplier: d.supplier, reference: d.reference, notes: d.notes, reason: undefined });
   }
   @Post("adjustments")
   @Roles("OWNER", "MANAGER", "STOREKEEPER")

@@ -107,7 +107,7 @@ class ReceiptService {
               for (final row in items)
                 [
                   row['name'] ?? row['product']?['name'] ?? 'Product',
-                  row['quantity']?.toString() ?? '',
+                  '${row['quantity'] ?? ''}${row['unit'] == null ? '' : ' ${row['unit']}'}',
                   kes(numberValue(row['unitPrice'] ?? row['sellingPrice'])),
                   kes(numberValue(row['lineDiscount'] ?? row['discount'])),
                   kes(numberValue(row['lineTotal'])),

@@ -100,6 +100,22 @@ class _StockScreenState extends State<StockScreen>
     Map<String, dynamic> p, {
     required bool intake,
   }) async {
+    final baseUnit = (p['unit'] ?? 'piece').toString();
+    final intakeUnits = <String>{baseUnit};
+    if (intake) {
+      try {
+        final response = await dio.get('/unit-conversions', queryParameters: {'productId': p['id']});
+        for (final value in response.data as List) {
+          final row = value as Map;
+          if (row['productId'] == null || row['productId']?.toString() == p['id'].toString()) {
+            if (row['toUnit'] == baseUnit) intakeUnits.add(row['fromUnit'].toString());
+            if (row['fromUnit'] == baseUnit) intakeUnits.add(row['toUnit'].toString());
+          }
+        }
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    var selectedUnit = baseUnit;
     final qty = TextEditingController(),
         cost = TextEditingController(),
         supplier = TextEditingController(),
@@ -112,13 +128,20 @@ class _StockScreenState extends State<StockScreen>
     ).join();
     final ok = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => StatefulBuilder(builder: (context, setDialogState) => AlertDialog(
         title: Text(intake ? 'Receive stock' : 'Adjust stock'),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(p['name'] ?? ''),
+              if (intake && intakeUnits.length > 1)
+                DropdownButtonFormField<String>(
+                  initialValue: selectedUnit,
+                  decoration: const InputDecoration(labelText: 'Receiving unit'),
+                  items: intakeUnits.map((unit) => DropdownMenuItem(value: unit, child: Text(unit))).toList(),
+                  onChanged: (value) { if (value != null) setDialogState(() => selectedUnit = value); },
+                ),
               TextField(
                 controller: qty,
                 keyboardType: TextInputType.numberWithOptions(
@@ -135,7 +158,7 @@ class _StockScreenState extends State<StockScreen>
                 TextField(
                   controller: cost,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Unit cost'),
+                  decoration: InputDecoration(labelText: 'Cost per $selectedUnit'),
                 ),
               if (intake) ...[
                 TextField(
@@ -199,6 +222,7 @@ class _StockScreenState extends State<StockScreen>
                       'productId': p['id'],
                       'quantity': amount,
                       'unitCost': unitCost,
+                      'unit': selectedUnit,
                       'supplier': supplier.text.trim().isEmpty
                           ? null
                           : supplier.text.trim(),
@@ -239,7 +263,7 @@ class _StockScreenState extends State<StockScreen>
             child: Text(intake ? 'Receive' : 'Adjust'),
           ),
         ],
-      ),
+      )),
     );
     if (ok == true) {
       await load();
@@ -273,7 +297,7 @@ class _StockScreenState extends State<StockScreen>
                     child: ListView.separated(
                       padding: const EdgeInsets.fromLTRB(14, 10, 14, 100),
                       itemCount: products.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 7),
+                      separatorBuilder: (_, _) => const SizedBox(height: 7),
                       itemBuilder: (context, i) {
                         final p = Map<String, dynamic>.from(products[i] as Map);
                         final quantity = numberValue(p['quantity']);
@@ -317,7 +341,7 @@ class _StockScreenState extends State<StockScreen>
                     child: ListView.separated(
                       padding: const EdgeInsets.all(14),
                       itemCount: movements.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      separatorBuilder: (_, _) => const Divider(height: 1),
                       itemBuilder: (context, i) {
                         final m = movements[i] as Map;
                         final product = m['product'] as Map?;
