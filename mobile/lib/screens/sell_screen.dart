@@ -21,9 +21,13 @@ class SellScreen extends ConsumerStatefulWidget {
     super.key,
     this.paymentStep = false,
     this.initialCustomerId,
+    this.initialProductId,
+    this.initialScan = false,
   });
   final bool paymentStep;
   final String? initialCustomerId;
+  final String? initialProductId;
+  final bool initialScan;
 
   @override
   ConsumerState<SellScreen> createState() => _SellScreenState();
@@ -46,6 +50,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
   bool _manualMpesa = false;
   String? _checkoutKey, _checkoutFingerprint;
   String _role = '';
+  bool _initialProductHandled = false;
 
   bool get _connected => ref
       .read(connectivityProvider)
@@ -194,6 +199,23 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       _cashReceived.text = _total.toStringAsFixed(2);
     }
     if (mounted) setState(() => _loading = false);
+    if (!_initialProductHandled &&
+        (widget.initialProductId != null || widget.initialScan) &&
+        _loadError == null) {
+      _initialProductHandled = true;
+      if (widget.initialScan) {
+        await _scanBarcode();
+      } else {
+        try {
+          final product = Map<String, dynamic>.from(
+            (await dio.get('/products/${widget.initialProductId}')).data as Map,
+          );
+          if (mounted) await _add(product);
+        } catch (error) {
+          if (mounted) _message(apiError(error));
+        }
+      }
+    }
   }
 
   void _message(String value) => ScaffoldMessenger.of(

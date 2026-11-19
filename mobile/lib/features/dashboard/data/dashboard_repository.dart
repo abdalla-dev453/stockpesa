@@ -48,6 +48,17 @@ class DashboardRepository {
       (await client.get('/stock')).data as List;
   Future<List<dynamic>> sales() async =>
       (await client.get('/sales')).data as List;
+
+  Future<Map<String, dynamic>> loadBoard() async => Map<String, dynamic>.from(
+    (await client.get('/dashboard/board')).data as Map,
+  );
+
+  Future<void> saveBoard({required List<String> layout, required List<String> favorites}) async {
+    await client.put('/dashboard/board/preferences', data: {
+      'layout': layout,
+      'favorites': favorites,
+    });
+  }
 }
 
 final dashboardRepositoryProvider = Provider((ref) => DashboardRepository(dio));
