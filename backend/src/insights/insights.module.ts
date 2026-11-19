@@ -1,5 +1,5 @@
-import { BadRequestException, Controller, Get, Patch, Param, ParseUUIDPipe, Query, UseGuards, Module, NotFoundException, Post, Body } from "@nestjs/common";
-import { IsDateString, IsIn, IsOptional } from "class-validator";
+import { BadRequestException, Controller, Get, Patch, Param, ParseUUIDPipe, Query, UseGuards, Module, NotFoundException, Post, Body, Put } from "@nestjs/common";
+import { ArrayMaxSize, IsArray, IsDateString, IsIn, IsOptional, IsString } from "class-validator";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma.service";
 import { AuthGuard, Me, Roles } from "../common/auth";
@@ -351,5 +351,95 @@ class ReportsController {
     return this.db.stockMovement.findMany({ where: { businessId: u.businessId }, include: { product: true }, orderBy: { createdAt: "desc" }, take: Math.min(500, Math.max(1, Number(limitText) || 100)) });
   }
 }
-@Module({ controllers: [AlertsController, ReportsController], providers: [AuthGuard] })
+class DashboardPreferenceDto {
+  @IsArray() @ArrayMaxSize(12) @IsString({ each: true }) layout: string[];
+  @IsArray() @ArrayMaxSize(12) @IsString({ each: true }) favorites: string[];
+}
+
+const BOARD_TILES = ["attention", "quick_actions", "fast_movers", "sales_summary", "stock_health", "debt"];
+const BOARD_ACTIONS = ["new_sale", "add_product", "receive_stock", "scan_barcode", "view_debt", "view_reports", "stock_count"];
+
+@Controller("dashboard") @UseGuards(AuthGuard)
+class DashboardBoardController {
+  constructor(private db: PrismaService) {}
+
+  @Get("board") async board(@Me() u) {
+    const [user, preference, fastMovers, stockSummary, unreadAlerts] = await Promise.all([
+      this.db.user.findFirst({ where: { id: u.sub, businessId: u.businessId }, select: { fullName: true, business: { select: { name: true } } } }),
+      this.db.$queryRaw<Array<{ layout: unknown; favorites: unknown }>>(Prisma.sql`SELECT "layout", "favorites" FROM "DashboardPreference" WHERE "userId" = ${u.sub}::uuid AND "businessId" = ${u.businessId}::uuid AND "role" = ${u.role}::"Role" LIMIT 1`),
+      this.db.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
+        SELECT p."id", p."name", p."sellingPrice", p."imageUrl", p."unit", p."minStock",
+          COALESCE(sl."quantity", 0) AS "quantity", SUM(si."stockQuantity") AS "quantitySold"
+        FROM "SaleItem" si JOIN "Sale" s ON s."id" = si."saleId" AND s."businessId" = si."businessId"
+        JOIN "Product" p ON p."id" = si."productId" AND p."businessId" = si."businessId"
+        LEFT JOIN "StockLevel" sl ON sl."productId" = p."id"
+        WHERE si."businessId" = ${u.businessId}::uuid AND s."saleDate" >= NOW() - INTERVAL '30 days'
+          AND s."status" NOT IN ('void','refunded') AND p."active" = true AND p."deletedAt" IS NULL
+          AND NOT EXISTS (SELECT 1 FROM "ProductVariant" v WHERE v."productId" = p."id" AND v."deletedAt" IS NULL AND v."active" = true)
+          AND (${u.role === "CASHIER" ? Prisma.sql`s."userId" = ${u.sub}::uuid` : u.role === "STOREKEEPER" ? Prisma.sql`FALSE` : Prisma.sql`TRUE`})
+        GROUP BY p."id", sl."quantity" ORDER BY SUM(si."stockQuantity") DESC LIMIT 8
+      `),
+      this.db.$queryRaw<Array<{ productCount: bigint; lowStock: bigint; outOfStock: bigint }>>(Prisma.sql`
+        WITH tracked AS (
+          SELECT p."id", p."minStock", COALESCE(sl."quantity", 0)::numeric AS quantity
+          FROM "Product" p LEFT JOIN "StockLevel" sl ON sl."productId" = p."id"
+          WHERE p."businessId" = ${u.businessId}::uuid AND p."active" = true AND p."deletedAt" IS NULL
+            AND NOT EXISTS (SELECT 1 FROM "ProductVariant" v WHERE v."productId" = p."id" AND v."deletedAt" IS NULL)
+          UNION ALL
+          SELECT v."id", v."minStock", v."quantity"::numeric
+          FROM "ProductVariant" v JOIN "Product" p ON p."id" = v."productId"
+          WHERE v."businessId" = ${u.businessId}::uuid AND v."active" = true AND v."deletedAt" IS NULL AND p."deletedAt" IS NULL AND p."active" = true
+        )
+        SELECT (SELECT COUNT(*) FROM "Product" WHERE "businessId" = ${u.businessId}::uuid AND "active" = true AND "deletedAt" IS NULL) AS "productCount",
+          COUNT(*) FILTER (WHERE quantity > 0 AND "minStock" > 0 AND quantity <= "minStock") AS "lowStock",
+          COUNT(*) FILTER (WHERE quantity <= 0) AS "outOfStock" FROM tracked
+      `),
+      this.db.alert.count({ where: { businessId: u.businessId, read: false, OR: [{ userId: null }, { userId: u.sub }] } }),
+    ]);
+    const defaults: Record<string, string[]> = {
+      OWNER: BOARD_TILES, MANAGER: BOARD_TILES,
+      CASHIER: ["quick_actions", "fast_movers", "sales_summary"],
+      STOREKEEPER: ["attention", "quick_actions", "stock_health"],
+    };
+    const layout = preference[0]?.layout as string[] | undefined;
+    const favorites = preference[0]?.favorites as string[] | undefined;
+    const favoriteIds = favorites?.filter((id) => /^[0-9a-f-]{36}$/i.test(id)) ?? [];
+    const favoriteProducts = favoriteIds.length ? await this.db.product.findMany({
+      where: { id: { in: favoriteIds }, businessId: u.businessId, deletedAt: null, active: true },
+      select: { id: true, name: true, sellingPrice: true, imageUrl: true, unit: true, minStock: true, stock: { select: { quantity: true } } },
+    }) : [];
+    return {
+      user: { name: user?.fullName ?? "there", role: u.role },
+      businessName: user?.business.name ?? "Your shop",
+      defaultLayout: defaults[u.role] ?? ["quick_actions", "fast_movers"],
+      preferencesSaved: preference.length > 0,
+      layout: layout?.filter((id) => BOARD_TILES.includes(id)) ?? null,
+      favorites: favorites?.filter((id) => BOARD_ACTIONS.includes(id) || /^[0-9a-f-]{36}$/i.test(id)) ?? [],
+      favoriteProducts: favoriteProducts.map((p) => ({ id: p.id, name: p.name, sellingPrice: Number(p.sellingPrice), imageUrl: p.imageUrl, unit: p.unit, minStock: Number(p.minStock), quantity: Number(p.stock?.quantity ?? 0) })),
+      summary: { ...stockSummary[0], productCount: Number(stockSummary[0]?.productCount ?? 0), lowStock: Number(stockSummary[0]?.lowStock ?? 0), outOfStock: Number(stockSummary[0]?.outOfStock ?? 0), unreadAlerts },
+      fastMovers: fastMovers.map((p) => ({ ...p, quantity: Number(p.quantity), quantitySold: Number(p.quantitySold), sellingPrice: Number(p.sellingPrice), minStock: Number(p.minStock) })),
+    };
+  }
+
+  @Put("board/preferences") async save(@Me() u, @Body() dto: DashboardPreferenceDto) {
+    if (dto.layout.some((id) => !BOARD_TILES.includes(id)) || dto.favorites.some((id) => !BOARD_ACTIONS.includes(id) && !/^[0-9a-f-]{36}$/i.test(id)))
+      throw new BadRequestException("Unknown dashboard tile or favorite");
+    const layout = [...new Set(dto.layout)];
+    const favorites = [...new Set(dto.favorites)];
+    const productIds = favorites.filter((id) => !BOARD_ACTIONS.includes(id));
+    if (productIds.length && await this.db.product.count({ where: { id: { in: productIds }, businessId: u.businessId, deletedAt: null, active: true } }) !== productIds.length)
+      throw new NotFoundException("One or more favorite products were not found");
+    const rows = await this.db.$queryRaw<Array<{ layout: unknown; favorites: unknown; updatedAt: Date }>>(Prisma.sql`
+      INSERT INTO "DashboardPreference" ("id", "businessId", "userId", "role", "layout", "favorites", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid(), ${u.businessId}::uuid, ${u.sub}::uuid, ${u.role}::"Role", ${JSON.stringify(layout)}::jsonb, ${JSON.stringify(favorites)}::jsonb, NOW(), NOW())
+      ON CONFLICT ("userId", "role") DO UPDATE SET "layout" = EXCLUDED."layout", "favorites" = EXCLUDED."favorites", "updatedAt" = NOW()
+      WHERE "DashboardPreference"."businessId" = ${u.businessId}::uuid
+      RETURNING "layout", "favorites", "updatedAt"
+    `);
+    if (!rows.length) throw new NotFoundException("Dashboard preferences not found");
+    return rows[0];
+  }
+}
+
+@Module({ controllers: [AlertsController, ReportsController, DashboardBoardController], providers: [AuthGuard] })
 export class InsightsModule {}

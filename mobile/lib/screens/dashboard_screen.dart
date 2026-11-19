@@ -1,9 +1,41 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
 import '../core/api.dart';
 import '../core/theme.dart';
+import '../core/widgets/product_image.dart';
 import '../features/dashboard/data/dashboard_repository.dart';
+
+const _tileNames = <String, String>{
+  'attention': 'Needs attention',
+  'quick_actions': 'Quick actions',
+  'fast_movers': 'Fast movers',
+  'sales_summary': 'Today at a glance',
+  'stock_health': 'Stock health',
+  'debt': 'Customer debt',
+};
+const _actions = <String, (String, IconData, String)>{
+  'new_sale': ('New sale', Icons.point_of_sale_rounded, '/sell'),
+  'add_product': ('Add product', Icons.add_box_outlined, '/products/add'),
+  'receive_stock': (
+    'Receive stock',
+    Icons.move_to_inbox_outlined,
+    '/stock/intake',
+  ),
+  'scan_barcode': (
+    'Scan barcode',
+    Icons.qr_code_scanner_rounded,
+    '/sell?scan=true',
+  ),
+  'view_debt': (
+    'View debt',
+    Icons.account_balance_wallet_outlined,
+    '/customers',
+  ),
+  'view_reports': ('View reports', Icons.bar_chart_rounded, '/reports'),
+  'stock_count': ('Stock count', Icons.fact_check_outlined, '/stock/count'),
+};
 
 class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
@@ -12,136 +44,692 @@ class DashboardScreen extends ConsumerStatefulWidget {
 }
 
 class _DashboardScreenState extends ConsumerState<DashboardScreen> {
-  String period = 'today';
-  DateTime? customStart, customEnd;
-  late Future<Map<String, dynamic>> data = _load();
-  Future<Map<String, dynamic>> _load({bool force = false}) =>
-      ref.read(dashboardRepositoryProvider).load(forceRefresh: force, period: period, startDate: customStart, endDate: customEnd);
-  Future<void> _refresh() async => setState(() => data = _load(force: true));
+  late Future<List<dynamic>> _data = _load();
+  Future<List<dynamic>> _load() async {
+    final repository = ref.read(dashboardRepositoryProvider);
+    final board = await repository.loadBoard();
+    final role = board['user']?['role']?.toString();
+    final stats = role == 'STOREKEEPER'
+        ? Map<String, dynamic>.from(board['summary'] as Map? ?? const {})
+        : await repository.load(period: 'today');
+    return [board, stats];
+  }
 
-  static const periods = <String, String>{
-    'today': 'Today', 'yesterday': 'Yesterday', 'last_7_days': 'Last 7 days',
-    'last_30_days': 'Last 30 days', 'this_month': 'This month', 'last_month': 'Last month', 'custom': 'Custom range',
-  };
+  Future<void> _refresh() async => setState(() => _data = _load());
 
   @override
-  Widget build(BuildContext context) => FutureBuilder<Map<String, dynamic>>(
-    future: data,
-    builder: (context, snap) {
-      if (snap.hasError) return _error(apiError(snap.error!));
-      if (!snap.hasData) return const _DashboardSkeleton();
-      final d = snap.data!;
-      final now = DateTime.now();
-      final greeting = now.hour < 12 ? 'Good morning' : now.hour < 17 ? 'Good afternoon' : 'Good evening';
-      final title = period == 'custom' && customStart != null ? '${customStart!.day}/${customStart!.month} – ${customEnd!.day}/${customEnd!.month}' : periods[period]!;
-      final change = d['changePercent'];
-      return RefreshIndicator(onRefresh: _refresh, child: ListView(
-        padding: const EdgeInsets.fromLTRB(18, 12, 18, 100),
-        children: [
-          Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(greeting, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: C.muted)),
-            Text('Business overview', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
-            Text(DateTime.now().toLocal().toString().substring(0, 10), style: Theme.of(context).textTheme.bodySmall),
-          ])), IconButton(onPressed: () => context.go('/alerts'), icon: const Icon(Icons.notifications_none_rounded))]),
-          const SizedBox(height: 16),
-          SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: periods.entries.map((entry) => Padding(
-            padding: const EdgeInsets.only(right: 8), child: ChoiceChip(label: Text(entry.value), selected: period == entry.key,
-              onSelected: (_) async {
-                if (entry.key == 'custom') {
-                  final range = await showDateRangePicker(context: context, firstDate: DateTime(2020), lastDate: DateTime.now(), initialDateRange: customStart == null ? null : DateTimeRange(start: customStart!, end: customEnd!));
-                  if (range == null || !context.mounted) return;
-                  setState(() { period = 'custom'; customStart = DateTime(range.start.year, range.start.month, range.start.day); customEnd = DateTime(range.end.year, range.end.month, range.end.day, 23, 59, 59); data = _load(); });
-                } else if (period != entry.key) {
-                  setState(() { period = entry.key; data = _load(); });
-                }
-              }),
-          )).toList())),
-          const SizedBox(height: 14),
-          _salesHero(context, d, title, change),
-          const SizedBox(height: 16),
-          GridView.count(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), crossAxisCount: MediaQuery.sizeOf(context).width > 650 ? 4 : 2,
-            mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 1.6,
-            children: [
-              _metric(context, 'Transactions', '${d['saleCount'] ?? 0}', Icons.receipt_long_outlined, C.emerald),
-              _metric(context, 'Items sold', numberValue(d['itemsSold']).toStringAsFixed(0), Icons.shopping_bag_outlined, C.forest),
-              _metric(context, 'Low stock', '${d['lowStock'] ?? 0}', Icons.warning_amber_rounded, C.warn),
-              _metric(context, 'Out of stock', '${d['outOfStock'] ?? 0}', Icons.remove_shopping_cart_outlined, C.danger),
-            ]),
-          const SizedBox(height: 22),
-          _sectionHeading(context, 'Sales trend', periods[period]!),
-          const SizedBox(height: 10),
-          Card(child: Padding(padding: const EdgeInsets.fromLTRB(16, 18, 16, 12), child: _TrendChart(points: (d['trend'] as List? ?? []).cast<Map>().map((p) => numberValue(p['sales']).toDouble()).toList()))),
-          if ((d['paymentMethods'] as List? ?? []).isNotEmpty) ...[
-            const SizedBox(height: 22), _sectionHeading(context, 'Payments received', title), const SizedBox(height: 8),
-            Card(child: Column(children: (d['paymentMethods'] as List).map((p) => ListTile(dense: true,
-              leading: CircleAvatar(backgroundColor: C.emerald.withValues(alpha: .1), child: const Icon(Icons.payments_outlined, color: C.emerald, size: 19)),
-              title: Text((p['method'] ?? '').toString()), trailing: Text(kes(numberValue(p['amount'])), style: const TextStyle(fontWeight: FontWeight.w700)),)).toList())),
-          ],
-          const SizedBox(height: 22), _sectionHeading(context, 'Stock health', 'Inventory at a glance'), const SizedBox(height: 8),
-          Card(child: Column(children: [
-            ListTile(leading: const Icon(Icons.inventory_2_outlined, color: C.emerald), title: const Text('Active products'), trailing: Text('${d['productCount'] ?? 0}', style: const TextStyle(fontWeight: FontWeight.w800))),
-            const Divider(height: 1, indent: 16, endIndent: 16),
-            ListTile(leading: const Icon(Icons.notifications_active_outlined, color: C.warn), title: const Text('Unread alerts'), trailing: Text('${d['unreadAlerts'] ?? 0}', style: const TextStyle(fontWeight: FontWeight.w800)), onTap: () => context.go('/alerts')),
-          ])),
-          if (d['outstandingCustomerDebt'] != null) ...[
-            const SizedBox(height: 22), _sectionHeading(context, 'Money owed', 'Customer balances'), const SizedBox(height: 8),
-            Card(child: ListTile(leading: const Icon(Icons.account_balance_wallet_outlined, color: C.coral), title: const Text('Outstanding receivables'), subtitle: Text('${d['indebtedCustomers']} customers with a balance'), trailing: Text(kes(numberValue(d['outstandingCustomerDebt'])), style: const TextStyle(fontWeight: FontWeight.w800)), onTap: () => context.go('/reports'))),
-          ],
-          const SizedBox(height: 20),
-          FilledButton.icon(onPressed: () => context.go('/sell'), icon: const Icon(Icons.add), label: const Text('New sale')),
-          const SizedBox(height: 10), OutlinedButton.icon(onPressed: () => context.go('/reports'), icon: const Icon(Icons.bar_chart_rounded), label: const Text('View reports')),
+  Widget build(BuildContext context) => FutureBuilder<List<dynamic>>(
+    future: _data,
+    builder: (context, snapshot) {
+      if (snapshot.hasError) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.cloud_off_outlined, size: 40),
+                const SizedBox(height: 12),
+                Text(apiError(snapshot.error!), textAlign: TextAlign.center),
+                TextButton(onPressed: _refresh, child: const Text('Retry')),
+              ],
+            ),
+          ),
+        );
+      }
+      if (!snapshot.hasData) return const _BoardLoading();
+      final board = Map<String, dynamic>.from(snapshot.data![0] as Map);
+      final stats = Map<String, dynamic>.from(snapshot.data![1] as Map);
+      final layout =
+          ((board['layout'] as List?)?.cast<String>() ??
+                  (board['defaultLayout'] as List).cast<String>())
+              .where(_tileNames.containsKey)
+              .toList();
+      final favorites = (board['favorites'] as List? ?? []).cast<String>();
+      final products = (board['fastMovers'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      final pinnedProducts = (board['favoriteProducts'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      final availableProducts = [...products, ...pinnedProducts]
+          .fold<Map<String, Map<String, dynamic>>>({}, (map, product) {
+            map[product['id'].toString()] = product;
+            return map;
+          })
+          .values
+          .toList();
+      final role = board['user']?['role']?.toString() ?? 'OWNER';
+      final roleActions = switch (role) {
+        'CASHIER' => ['new_sale', 'scan_barcode', 'view_debt'],
+        'STOREKEEPER' => ['receive_stock', 'stock_count'],
+        _ => [
+          'new_sale',
+          'add_product',
+          'receive_stock',
+          'scan_barcode',
+          'view_debt',
+          'view_reports',
+          'stock_count',
         ],
-      ));
+      };
+      final quickActions = favorites
+          .where(
+            (id) =>
+                _actions.containsKey(id) ||
+                availableProducts.any((p) => p['id'] == id),
+          )
+          .toList();
+      final shownActions = board['preferencesSaved'] == true
+          ? quickActions
+          : roleActions;
+      final now = DateTime.now();
+      final greeting = now.hour < 12
+          ? 'Good morning'
+          : now.hour < 17
+          ? 'Good afternoon'
+          : 'Good evening';
+      final name = (board['user']?['name']?.toString().split(' ').first ?? '')
+          .trim();
+      return RefreshIndicator(
+        onRefresh: _refresh,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 100),
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$greeting${name.isEmpty ? '' : ', $name'}',
+                        style: Theme.of(
+                          context,
+                        ).textTheme.titleMedium?.copyWith(color: C.muted),
+                      ),
+                      Text(
+                        board['businessName']?.toString() ?? 'Your shop',
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                      Text(
+                        _dateLabel(now),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: C.muted),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => context.go('/alerts'),
+                  tooltip: 'Alerts',
+                  icon: const Icon(Icons.notifications_none_rounded),
+                ),
+                IconButton(
+                  onPressed: () => _editBoard(
+                    context,
+                    layout,
+                    favorites,
+                    availableProducts,
+                    roleActions,
+                  ),
+                  tooltip: 'Edit board',
+                  icon: const Icon(Icons.tune_rounded),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            for (final tile in layout) ...[
+              if (tile == 'attention') ...[
+                _attention(stats),
+                const SizedBox(height: 16),
+              ],
+              if (tile == 'quick_actions') ...[
+                _quickActions(shownActions, availableProducts, role),
+                const SizedBox(height: 18),
+              ],
+              if (tile == 'fast_movers') ...[
+                _fastMovers(products, role),
+                const SizedBox(height: 18),
+              ],
+              if (tile == 'sales_summary') ...[
+                _sales(stats),
+                const SizedBox(height: 18),
+              ],
+              if (tile == 'stock_health') ...[
+                _stockHealth(stats),
+                const SizedBox(height: 18),
+              ],
+              if (tile == 'debt' &&
+                  stats['outstandingCustomerDebt'] != null) ...[
+                _debt(stats),
+                const SizedBox(height: 18),
+              ],
+            ],
+          ],
+        ),
+      );
     },
   );
 
-  Widget _salesHero(BuildContext context, Map<String, dynamic> d, String title, dynamic change) {
-    final pct = change == null ? null : numberValue(change).toDouble();
-    final positive = pct == null || pct >= 0;
-    return Container(padding: const EdgeInsets.all(22), decoration: BoxDecoration(gradient: const LinearGradient(colors: [C.forest, C.emerald]), borderRadius: BorderRadius.circular(24)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('$title sales', style: const TextStyle(color: Colors.white70)), const SizedBox(height: 8),
-        Text(kes(numberValue(d['sales'])), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 30)),
+  String _dateLabel(DateTime d) =>
+      '${_weekday(d.weekday)}, ${d.day} ${_month(d.month)} ${d.year}';
+  String _weekday(int d) =>
+      const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][d - 1];
+  String _month(int d) => const [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ][d - 1];
+
+  Widget _section(String title, {Widget? action}) => Row(
+    children: [
+      Expanded(
+        child: Text(
+          title,
+          style: Theme.of(
+            context,
+          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+        ),
+      ),
+      ?action,
+    ],
+  );
+
+  Widget _attention(Map<String, dynamic> d) {
+    final low = numberValue(d['lowStock']).toInt();
+    final out = numberValue(d['outOfStock']).toInt();
+    final debt = numberValue(d['outstandingCustomerDebt']);
+    final debtors = numberValue(d['indebtedCustomers']).toInt();
+    final alerts = numberValue(d['unreadAlerts']).toInt();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _section('Needs attention'),
+            const SizedBox(height: 10),
+            if (low + out == 0 && debt == 0 && alerts == 0)
+              const Text(
+                'You’re all caught up. Check back here for anything that needs your attention.',
+                style: TextStyle(color: C.muted),
+              )
+            else ...[
+              if (low + out > 0)
+                _attentionRow(
+                  Icons.inventory_2_outlined,
+                  '$low products need restocking${out > 0 ? ' · $out out of stock' : ''}',
+                  '/stock',
+                ),
+              if (debt > 0)
+                _attentionRow(
+                  Icons.account_balance_wallet_outlined,
+                  '${kes(debt)} owed by $debtors customers',
+                  '/customers',
+                ),
+              if (alerts > 0)
+                _attentionRow(
+                  Icons.notifications_active_outlined,
+                  '$alerts unread alerts',
+                  '/alerts',
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _attentionRow(IconData icon, String label, String route) => ListTile(
+    contentPadding: EdgeInsets.zero,
+    dense: true,
+    leading: Icon(icon, color: C.amber),
+    title: Text(label),
+    trailing: const Icon(Icons.chevron_right),
+    onTap: () => context.go(route),
+  );
+
+  Widget _quickActions(
+    List<String> ids,
+    List<Map<String, dynamic>> products,
+    String role,
+  ) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      _section('Quick actions'),
+      const SizedBox(height: 10),
+      Wrap(
+        spacing: 9,
+        runSpacing: 9,
+        children: [
+          for (final id in ids)
+            if (_actions[id] case final action?)
+              ActionChip(
+                avatar: Icon(action.$2, size: 18, color: C.emerald),
+                label: Text(action.$1),
+                onPressed: () => context.go(action.$3),
+              ),
+        ],
+      ),
+      if (ids.any((id) => products.any((p) => p['id'] == id))) ...[
         const SizedBox(height: 8),
-        Row(children: [const Icon(Icons.receipt_outlined, size: 17, color: Colors.white70), const SizedBox(width: 6), Text('${d['saleCount'] ?? 0} sales', style: const TextStyle(color: Colors.white70)),
-          const Spacer(), if (pct != null) Container(padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5), decoration: BoxDecoration(color: Colors.white.withValues(alpha: .16), borderRadius: BorderRadius.circular(20)), child: Row(children: [Icon(positive ? Icons.trending_up : Icons.trending_down, color: Colors.white, size: 16), const SizedBox(width: 4), Text('${pct.abs()}% vs previous period', style: const TextStyle(color: Colors.white, fontSize: 11))]))]),
-      ]));
+        for (final id in ids)
+          for (final p in products.where((p) => p['id'] == id))
+            SizedBox(
+              width: 220,
+              child: Card(
+                child: ListTile(
+                  leading: ProductImage(
+                    imageUrl: p['imageUrl']?.toString(),
+                    width: 44,
+                    height: 44,
+                  ),
+                  title: Text(
+                    p['name']?.toString() ?? 'Product',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(kes(numberValue(p['sellingPrice']))),
+                  onTap: () => context.go(
+                    role == 'STOREKEEPER'
+                        ? '/products/${p['id']}'
+                        : '/sell?productId=${p['id']}',
+                  ),
+                ),
+              ),
+            ),
+      ],
+    ],
+  );
+
+  Widget _fastMovers(
+    List<Map<String, dynamic>> products,
+    String role,
+  ) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      _section(
+        'Fast movers',
+        action: Text(
+          '${products.length} products',
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: C.muted),
+        ),
+      ),
+      const SizedBox(height: 10),
+      if (products.isEmpty)
+        const Card(
+          child: Padding(
+            padding: EdgeInsets.all(16),
+            child: Text(
+              'Your best sellers will show here after you record a few sales.',
+            ),
+          ),
+        )
+      else
+        SizedBox(
+          height: 150,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: products.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            itemBuilder: (context, index) {
+              final p = products[index];
+              final quantity = numberValue(p['quantity']);
+              final min = numberValue(p['minStock']);
+              final stock = quantity <= 0
+                  ? 'Out of stock'
+                  : min > 0 && quantity <= min
+                  ? '$quantity left · low'
+                  : '$quantity ${p['unit'] ?? ''} left';
+              return SizedBox(
+                width: 152,
+                child: Card(
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: quantity <= 0
+                        ? null
+                        : () => context.go(
+                            role == 'STOREKEEPER'
+                                ? '/products/${p['id']}'
+                                : '/sell?productId=${p['id']}',
+                          ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(11),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Center(
+                              child: ProductImage(
+                                imageUrl: p['imageUrl']?.toString(),
+                                width: 62,
+                                height: 62,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            p['name']?.toString() ?? 'Product',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          Text(
+                            kes(numberValue(p['sellingPrice'])),
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          Text(
+                            stock,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: quantity <= min ? C.warn : C.muted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+    ],
+  );
+
+  Widget _sales(Map<String, dynamic> d) {
+    final change = d['changePercent'] == null
+        ? null
+        : numberValue(d['changePercent']).toDouble();
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(colors: [C.forest, C.emerald]),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Today at a glance',
+            style: TextStyle(color: Colors.white70),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            kes(numberValue(d['sales'])),
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 28,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Text(
+                '${d['saleCount'] ?? 0} sales',
+                style: const TextStyle(color: Colors.white70),
+              ),
+              const Spacer(),
+              if (change != null)
+                Text(
+                  '${change >= 0 ? '↑' : '↓'} ${change.abs()}% vs previous period',
+                  style: const TextStyle(color: Colors.white),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
-  Widget _sectionHeading(BuildContext context, String heading, String detail) => Row(children: [Expanded(child: Text(heading, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800))), Text(detail, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: C.muted))]);
-  Widget _metric(BuildContext context, String title, String value, IconData icon, Color color) => Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Icon(icon, color: color), Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)), Text(title, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: C.muted))])));
-  Widget _error(String message) => Center(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.cloud_off_outlined, size: 40), const SizedBox(height: 12), Text(message, textAlign: TextAlign.center), TextButton(onPressed: _refresh, child: const Text('Retry'))])));
-}
+  Widget _stockHealth(Map<String, dynamic> d) => Card(
+    child: Column(
+      children: [
+        ListTile(
+          leading: const Icon(Icons.inventory_2_outlined, color: C.emerald),
+          title: const Text('Active products'),
+          trailing: Text(
+            '${d['productCount'] ?? 0}',
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+        ),
+        const Divider(height: 1, indent: 16, endIndent: 16),
+        ListTile(
+          leading: const Icon(Icons.warning_amber_rounded, color: C.amber),
+          title: const Text('Low / out of stock'),
+          trailing: Text(
+            '${numberValue(d['lowStock']).toInt()} / ${numberValue(d['outOfStock']).toInt()}',
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          onTap: () => context.go('/stock'),
+        ),
+      ],
+    ),
+  );
+  Widget _debt(Map<String, dynamic> d) => Card(
+    child: ListTile(
+      leading: const Icon(
+        Icons.account_balance_wallet_outlined,
+        color: C.coral,
+      ),
+      title: const Text('Customer debt'),
+      subtitle: Text('${d['indebtedCustomers'] ?? 0} customers with a balance'),
+      trailing: Text(
+        kes(numberValue(d['outstandingCustomerDebt'])),
+        style: const TextStyle(fontWeight: FontWeight.w800),
+      ),
+      onTap: () => context.go('/customers'),
+    ),
+  );
 
-class _TrendChart extends StatelessWidget {
-  const _TrendChart({required this.points});
-  final List<double> points;
-  @override
-  Widget build(BuildContext context) => SizedBox(height: 170, child: points.isEmpty
-    ? Center(child: Text('Sales will appear here once recorded.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)))
-    : CustomPaint(painter: _TrendPainter(points, Theme.of(context).colorScheme.primary), child: const SizedBox.expand()));
-}
-
-class _TrendPainter extends CustomPainter {
-  _TrendPainter(this.points, this.color);
-  final List<double> points; final Color color;
-  @override
-  void paint(Canvas canvas, Size size) {
-    const inset = 12.0; final chart = Rect.fromLTWH(inset, inset, size.width - inset * 2, size.height - inset * 2);
-    final grid = Paint()..color = color.withValues(alpha: .10)..strokeWidth = 1;
-    for (var i = 0; i < 4; i++) { final y = chart.top + chart.height * i / 3; canvas.drawLine(Offset(chart.left, y), Offset(chart.right, y), grid); }
-    if (points.isEmpty) return;
-    final maxValue = points.reduce((a, b) => a > b ? a : b); final minValue = points.reduce((a, b) => a < b ? a : b);
-    final range = maxValue == minValue ? (maxValue == 0 ? 1.0 : maxValue) : maxValue - minValue;
-    final path = Path();
-    for (var i = 0; i < points.length; i++) { final x = points.length == 1 ? chart.center.dx : chart.left + chart.width * i / (points.length - 1); final y = chart.bottom - ((points[i] - minValue) / range) * chart.height; i == 0 ? path.moveTo(x, y) : path.lineTo(x, y); }
-    canvas.drawPath(path, Paint()..color = color..strokeWidth = 3..style = PaintingStyle.stroke..strokeCap = StrokeCap.round..strokeJoin = StrokeJoin.round);
-    for (var i = 0; i < points.length; i++) { final x = points.length == 1 ? chart.center.dx : chart.left + chart.width * i / (points.length - 1); final y = chart.bottom - ((points[i] - minValue) / range) * chart.height; canvas.drawCircle(Offset(x, y), 3.5, Paint()..color = color); }
+  Future<void> _editBoard(
+    BuildContext context,
+    List<String> currentLayout,
+    List<String> currentFavorites,
+    List<Map<String, dynamic>> products,
+    List<String> availableActions,
+  ) async {
+    var layout = List<String>.from(currentLayout);
+    var favorites = List<String>.from(currentFavorites);
+    final result = await showModalBottomSheet<(List<String>, List<String>)>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheet) => SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(context).height * .82,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Customize your board',
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => setSheet(() {
+                          layout = [
+                            'quick_actions',
+                            'fast_movers',
+                            'sales_summary',
+                          ];
+                        }),
+                        child: const Text('Reset'),
+                      ),
+                    ],
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Tiles · drag to reorder, remove to hide'),
+                  ),
+                ),
+                Expanded(
+                  child: ReorderableListView(
+                    children: [
+                      for (final id in layout)
+                        ListTile(
+                          key: ValueKey(id),
+                          title: Text(_tileNames[id]!),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                onPressed: () =>
+                                    setSheet(() => layout.remove(id)),
+                                icon: const Icon(Icons.close),
+                              ),
+                              const Icon(Icons.drag_handle),
+                            ],
+                          ),
+                        ),
+                    ],
+                    onReorder: (oldIndex, newIndex) => setSheet(() {
+                      if (newIndex > oldIndex) newIndex--;
+                      final id = layout.removeAt(oldIndex);
+                      layout.insert(newIndex, id);
+                    }),
+                  ),
+                ),
+                const Divider(),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Add a tile'),
+                  ),
+                ),
+                Wrap(
+                  children: [
+                    for (final id in _tileNames.keys)
+                      if (!layout.contains(id))
+                        ActionChip(
+                          label: Text(_tileNames[id]!),
+                          onPressed: () => setSheet(() => layout.add(id)),
+                        ),
+                  ],
+                ),
+                const Divider(),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Pinned shortcuts'),
+                  ),
+                ),
+                SizedBox(
+                  height: 145,
+                  child: ListView(
+                    children: [
+                      for (final id in availableActions)
+                        CheckboxListTile(
+                          dense: true,
+                          value: favorites.contains(id),
+                          title: Text(_actions[id]!.$1),
+                          secondary: Icon(_actions[id]!.$2),
+                          onChanged: (on) => setSheet(() {
+                            on == true
+                                ? favorites.add(id)
+                                : favorites.remove(id);
+                          }),
+                        ),
+                      for (final p in products)
+                        CheckboxListTile(
+                          dense: true,
+                          value: favorites.contains(p['id']),
+                          title: Text(p['name']?.toString() ?? 'Product'),
+                          secondary: const Icon(Icons.inventory_2_outlined),
+                          onChanged: (on) => setSheet(() {
+                            on == true
+                                ? favorites.add(p['id'].toString())
+                                : favorites.remove(p['id']);
+                          }),
+                        ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: FilledButton(
+                    onPressed: () =>
+                        Navigator.pop(context, (layout, favorites)),
+                    child: const Text('Save board'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (result == null || !context.mounted) return;
+    try {
+      await ref
+          .read(dashboardRepositoryProvider)
+          .saveBoard(layout: result.$1, favorites: result.$2);
+      if (context.mounted) {
+        setState(() => _data = _load());
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Your board is saved')));
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(apiError(error))));
+      }
+    }
   }
-  @override bool shouldRepaint(covariant _TrendPainter old) => old.points != points || old.color != color;
 }
 
-class _DashboardSkeleton extends StatelessWidget {
-  const _DashboardSkeleton();
-  @override Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(18), children: [Container(height: 150, decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(24))), const SizedBox(height: 18), GridView.count(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), crossAxisCount: 2, mainAxisSpacing: 12, crossAxisSpacing: 12, childAspectRatio: 1.35, children: List.generate(4, (_) => Card(color: Theme.of(context).colorScheme.surfaceContainerHighest))), const Center(child: CircularProgressIndicator())]);
+class _BoardLoading extends StatelessWidget {
+  const _BoardLoading();
+  @override
+  Widget build(BuildContext context) => ListView(
+    padding: const EdgeInsets.all(18),
+    children: [
+      Container(
+        height: 95,
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+      const SizedBox(height: 16),
+      Container(
+        height: 130,
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+      const SizedBox(height: 16),
+      const Center(child: CircularProgressIndicator()),
+    ],
+  );
 }

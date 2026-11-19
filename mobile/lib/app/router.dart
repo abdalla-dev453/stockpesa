@@ -112,6 +112,8 @@ final routerProvider = Provider<GoRouter>((ref) {
             path: '/sell',
             builder: (_, state) => SellScreen(
               initialCustomerId: state.uri.queryParameters['customerId'],
+              initialProductId: state.uri.queryParameters['productId'],
+              initialScan: state.uri.queryParameters['scan'] == 'true',
             ),
             routes: [
               GoRoute(path: 'cart', builder: (_, _) => const SellScreen()),
