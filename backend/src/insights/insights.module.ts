@@ -364,9 +364,8 @@ class DashboardBoardController {
   constructor(private db: PrismaService) {}
 
   @Get("board") async board(@Me() u) {
-    const [user, preference, fastMovers, stockSummary, unreadAlerts] = await Promise.all([
+    const [user, fastMovers, stockSummary, unreadAlerts] = await Promise.all([
       this.db.user.findFirst({ where: { id: u.sub, businessId: u.businessId }, select: { fullName: true, business: { select: { name: true } } } }),
-      this.db.$queryRaw<Array<{ layout: unknown; favorites: unknown }>>(Prisma.sql`SELECT "layout", "favorites" FROM "DashboardPreference" WHERE "userId" = ${u.sub}::uuid AND "businessId" = ${u.businessId}::uuid AND "role" = ${u.role}::"Role" LIMIT 1`),
       this.db.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
         SELECT p."id", p."name", p."sellingPrice", p."imageUrl", p."unit", p."minStock",
           COALESCE(sl."quantity", 0) AS "quantity", SUM(si."stockQuantity") AS "quantitySold"
@@ -396,14 +395,22 @@ class DashboardBoardController {
       `),
       this.db.alert.count({ where: { businessId: u.businessId, read: false, OR: [{ userId: null }, { userId: u.sub }] } }),
     ]);
+    let preference: { layout?: string[]; favorites?: string[] } | null = null;
+    try {
+      const rows = await this.db.$queryRaw<Array<{ layout: unknown; favorites: unknown }>>(Prisma.sql`SELECT "layout", "favorites" FROM "DashboardPreference" WHERE "userId" = ${u.sub}::uuid AND "businessId" = ${u.businessId}::uuid AND "role" = ${u.role}::"Role" LIMIT 1`);
+      preference = rows[0] as { layout?: string[]; favorites?: string[] } | undefined ?? null;
+    } catch {
+      // DashboardPreference table may not be provisioned yet; fall back to defaults.
+      preference = null;
+    }
     const defaults: Record<string, string[]> = {
       OWNER: BOARD_TILES, MANAGER: BOARD_TILES,
       CASHIER: ["quick_actions", "fast_movers", "sales_summary"],
       STOREKEEPER: ["attention", "quick_actions", "stock_health"],
     };
-    const layout = preference[0]?.layout as string[] | undefined;
-    const favorites = preference[0]?.favorites as string[] | undefined;
-    const favoriteIds = favorites?.filter((id) => /^[0-9a-f-]{36}$/i.test(id)) ?? [];
+    const layout = preference?.layout?.filter((id) => BOARD_TILES.includes(id)) ?? null;
+    const favorites = preference?.favorites?.filter((id) => BOARD_ACTIONS.includes(id) || /^[0-9a-f-]{36}$/i.test(id)) ?? [];
+    const favoriteIds = favorites.filter((id) => /^[0-9a-f-]{36}$/i.test(id));
     const favoriteProducts = favoriteIds.length ? await this.db.product.findMany({
       where: { id: { in: favoriteIds }, businessId: u.businessId, deletedAt: null, active: true },
       select: { id: true, name: true, sellingPrice: true, imageUrl: true, unit: true, minStock: true, stock: { select: { quantity: true } } },
@@ -412,9 +419,9 @@ class DashboardBoardController {
       user: { name: user?.fullName ?? "there", role: u.role },
       businessName: user?.business.name ?? "Your shop",
       defaultLayout: defaults[u.role] ?? ["quick_actions", "fast_movers"],
-      preferencesSaved: preference.length > 0,
-      layout: layout?.filter((id) => BOARD_TILES.includes(id)) ?? null,
-      favorites: favorites?.filter((id) => BOARD_ACTIONS.includes(id) || /^[0-9a-f-]{36}$/i.test(id)) ?? [],
+      preferencesSaved: preference !== null,
+      layout,
+      favorites,
       favoriteProducts: favoriteProducts.map((p) => ({ id: p.id, name: p.name, sellingPrice: Number(p.sellingPrice), imageUrl: p.imageUrl, unit: p.unit, minStock: Number(p.minStock), quantity: Number(p.stock?.quantity ?? 0) })),
       summary: { ...stockSummary[0], productCount: Number(stockSummary[0]?.productCount ?? 0), lowStock: Number(stockSummary[0]?.lowStock ?? 0), outOfStock: Number(stockSummary[0]?.outOfStock ?? 0), unreadAlerts },
       fastMovers: fastMovers.map((p) => ({ ...p, quantity: Number(p.quantity), quantitySold: Number(p.quantitySold), sellingPrice: Number(p.sellingPrice), minStock: Number(p.minStock) })),
