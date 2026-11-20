@@ -16,7 +16,7 @@ async function bootstrap() {
   }
   const corsOrigins = (process.env.CORS_ORIGINS ?? "")
     .split(",")
-    .map((v) => v.trim())
+    .map((v) => v.trim().replace(/\/$/, ""))
     .filter(Boolean);
   if (production && (!corsOrigins.length || corsOrigins.includes("*"))) {
     throw new Error("Production requires explicit CORS_ORIGINS; wildcard CORS is disabled");
@@ -57,10 +57,29 @@ async function bootstrap() {
   const allowedOrigins = corsOrigins.length
     ? corsOrigins
     : ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"];
+  // An allowlist entry is matched as scheme + host, never as a string prefix. A bare host
+  // ("http://10.10.155.108") allows any port; an explicit port matches only that port;
+  // "*" in the host is a wildcard. Non-http(s) origins can never match.
+  const parseOrigin = (value: string) => {
+    try { return new URL(value); } catch { return null; }
+  };
+  const originPatterns = allowedOrigins.map((entry) => parseOrigin(entry));
+  const isAllowedOrigin = (origin: string) => {
+    const url = parseOrigin(origin);
+    if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) return false;
+    return originPatterns.some((rule) => {
+      if (!rule || rule.protocol !== url.protocol) return false;
+      if (rule.port && rule.port !== url.port) return false;
+      if (!rule.hostname.includes("*")) return rule.hostname === url.hostname;
+      const rx = new RegExp(`^${rule.hostname.split("*").map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+      return rx.test(url.hostname);
+    });
+  };
   app.enableCors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
+      if (isAllowedOrigin(origin)) return callback(null, true);
       // In local development, permit any localhost / 127.0.0.1 port (e.g. random Flutter Chrome dev server ports)
       if (!production && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
         return callback(null, true);

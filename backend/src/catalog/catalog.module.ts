@@ -46,9 +46,11 @@ import { Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { AuthGuard, Me, Roles } from "../common/auth";
 import { StockModule, StockService } from "../stock/stock.module";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { StorageModule } from "../common/storage/storage.module";
+import { STORAGE_PROVIDER } from "../common/storage/storage.token";
+import { StorageProvider } from "../common/storage/storage.interface";
+import { Inject } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
 
 const UNITS = ["piece", "kg", "gram", "litre", "millilitre", "packet", "carton", "bale", "dozen", "bottle", "pack", "other"];
 class CategoryDto {
@@ -63,6 +65,7 @@ class ProductDto {
   @IsIn(UNITS) unit: string;
   @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) buyingPrice: number;
   @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) sellingPrice: number;
+  @IsOptional() @IsUrl({ require_protocol: true }) imageUrl?: string;
   @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 3 }) @Min(0) minStock?: number;
 }
 class ProductPatchDto {
@@ -83,6 +86,7 @@ class ProductPatchDto {
   @IsOptional() @IsIn(["ACTIVE", "INACTIVE", "DISCONTINUED", "OUT_OF_SEASON"]) status?: string;
   @IsOptional() @IsBoolean() expiryTracking?: boolean;
   @IsOptional() @IsBoolean() batchTracking?: boolean;
+  @IsOptional() @IsUrl({ require_protocol: true }) imageUrl?: string | null;
 }
 class ListQuery {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
@@ -443,6 +447,9 @@ class ImageDto {
   @IsOptional() @IsString() altText?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) sortOrder?: number;
 }
+class MainImageDto {
+  @IsOptional() @IsUrl({ require_protocol: true }) imageUrl?: string | null;
+}
 class TagsDto {
   @IsArray() @ArrayMinSize(0) tags: string[];
 }
@@ -450,7 +457,7 @@ class TagsDto {
 @Controller()
 @UseGuards(AuthGuard)
 class ProductPowerController {
-  constructor(private db: PrismaService) {}
+  constructor(private db: PrismaService, @Inject(STORAGE_PROVIDER) private storage: StorageProvider) {}
 
   private async product(u: any, id: string) {
     const row = await this.db.product.findFirst({ where: { id, businessId: u.businessId, deletedAt: null } });
@@ -578,6 +585,12 @@ class ProductPowerController {
     return this.db.productPriceHistory.findMany({ where: { businessId: u.businessId, productId: id }, orderBy: { createdAt: "desc" }, take: 100 });
   }
 
+  @Get("products/:id/movements")
+  async productMovements(@Me() u: any, @Param("id", ParseUUIDPipe) id: string) {
+    await this.product(u, id);
+    return this.db.stockMovement.findMany({ where: { businessId: u.businessId, productId: id }, orderBy: { createdAt: "desc" }, take: 100 });
+  }
+
   @Get("products/:id/bundle")
   async getBundle(@Me() u: any, @Param("id", ParseUUIDPipe) id: string) {
     await this.product(u, id);
@@ -640,7 +653,7 @@ class ProductPowerController {
     return this.db.productImage.findMany({ where: { businessId: u.businessId, productId: id }, orderBy: { sortOrder: "asc" } });
   }
 
-  @Post("products/:id/images") @Roles("OWNER", "MANAGER")
+  @Post("products/:id/images") @Roles("OWNER", "MANAGER") @Throttle({ default: { limit: 10, ttl: 60000 } })
   async addImage(@Me() u: any, @Param("id", ParseUUIDPipe) id: string, @Body() d: ImageDto) {
     if (!d.url.startsWith("https://")) throw new BadRequestException("Use a secure HTTPS image URL");
     await this.product(u, id);
@@ -651,7 +664,7 @@ class ProductPowerController {
     });
   }
 
-  @Post("products/:id/images/upload") @Roles("OWNER", "MANAGER")
+  @Post("products/:id/images/upload") @Roles("OWNER", "MANAGER") @Throttle({ default: { limit: 5, ttl: 60000 } })
   @UseInterceptors(FileInterceptor("file", {
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (_req, file, done) => {
@@ -666,19 +679,14 @@ class ProductPowerController {
       : file.buffer.subarray(0, 4).toString("ascii") === "RIFF" && file.buffer.subarray(8, 12).toString("ascii") === "WEBP";
     if (!signature) throw new BadRequestException("The uploaded file is not a valid image");
     await this.product(u, id);
-    const ext = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[file.mimetype] ?? "jpg";
-    const filename = `${randomUUID()}.${ext}`;
-    const directory = join(process.env.UPLOAD_DIR ?? "uploads", "products");
-    await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, filename), file.buffer, { flag: "wx" });
-    const url = `/uploads/products/${filename}`;
+    const uploaded = await this.storage.upload(file);
     try {
       return await this.db.$transaction(async (tx) => {
-        const image = await tx.productImage.create({ data: { businessId: u.businessId, productId: id, url, altText: file.originalname.slice(0, 200) } });
-        if (!(await tx.product.findUnique({ where: { id }, select: { imageUrl: true } }))?.imageUrl) await tx.product.update({ where: { id }, data: { imageUrl: url } });
+        const image = await tx.productImage.create({ data: { businessId: u.businessId, productId: id, url: uploaded.url, altText: file.originalname.slice(0, 200) } });
+        if (!(await tx.product.findUnique({ where: { id }, select: { imageUrl: true } }))?.imageUrl) await tx.product.update({ where: { id }, data: { imageUrl: uploaded.url } });
         return image;
       });
-    } catch (error) { await unlink(join(directory, filename)).catch(() => undefined); throw error; }
+    } catch (error) { await this.storage.delete(uploaded.key).catch(() => undefined); throw error; }
   }
 
   @Delete("products/:id/images/:imageId") @Roles("OWNER", "MANAGER")
@@ -693,6 +701,19 @@ class ProductPowerController {
       if (product?.imageUrl === image.url) await tx.product.update({ where: { id }, data: { imageUrl: next?.url ?? null } });
     });
     return { deleted: true };
+  }
+
+  @Patch("products/:id/main-image") @Roles("OWNER", "MANAGER")
+  async setMainImage(@Me() u: any, @Param("id", ParseUUIDPipe) id: string, @Body() d: MainImageDto) {
+    await this.product(u, id);
+    if (d.imageUrl !== undefined && d.imageUrl !== null && !d.imageUrl.startsWith("https://")) {
+      throw new BadRequestException("Use a secure HTTPS image URL");
+    }
+    return await this.db.$transaction(async (tx) => {
+      const updated = await tx.product.update({ where: { id }, data: { imageUrl: d.imageUrl ?? null } });
+      await tx.auditLog.create({ data: { businessId: u.businessId, userId: u.sub, action: "product.main_image_updated", entity: "product", entityId: id, meta: { imageUrl: d.imageUrl } } });
+      return updated;
+    });
   }
 
   @Get("product-tags")
@@ -713,5 +734,5 @@ class ProductPowerController {
   }
 }
 
-@Module({ imports: [StockModule], controllers: [CategoriesController, ProductPowerController, ProductsController], providers: [AuthGuard] })
+@Module({ imports: [StockModule, StorageModule], controllers: [CategoriesController, ProductPowerController, ProductsController], providers: [AuthGuard] })
 export class CatalogModule {}

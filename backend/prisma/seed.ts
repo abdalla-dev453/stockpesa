@@ -23,38 +23,69 @@ async function seedStressCatalog(businessId: string, requested: number) {
     console.log(`Load test catalog: ${created}/${count} products prepared`);
   }
 }
-// [name, category, buy, sell, qty, min]
-const P: [string, string, number, number, number, number][] = [
-  ["Unga Jogoo 2kg", "Groceries", 150, 175, 40, 10],
-  ["Sugar 1kg", "Groceries", 130, 160, 6, 10],
-  ["Cooking Oil 1L", "Groceries", 260, 310, 0, 8],
-  ["Rice Pishori 1kg", "Groceries", 170, 210, 25, 8],
-  ["Maize Flour 1kg", "Groceries", 70, 90, 50, 15],
-  ["Bread 400g", "Groceries", 55, 65, 12, 10],
-  ["Eggs Tray", "Groceries", 380, 450, 5, 5],
-  ["Salt 500g", "Groceries", 25, 40, 30, 10],
-  ["Tea Leaves 250g", "Groceries", 90, 120, 18, 6],
-  ["Soda 500ml", "Drinks", 45, 60, 48, 24],
-  ["Bottled Water 1L", "Drinks", 30, 50, 3, 12],
-  ["Juice 1L", "Drinks", 110, 150, 14, 6],
-  ["Milk 500ml", "Drinks", 55, 65, 0, 12],
-  ["Energy Drink", "Drinks", 70, 100, 9, 6],
-  ["Omo 1kg", "Household", 280, 340, 10, 4],
-  ["Bar Soap", "Household", 90, 120, 22, 8],
-  ["Jik 750ml", "Household", 120, 160, 7, 5],
-  ["Toilet Paper 4pk", "Household", 140, 190, 15, 6],
-  ["Matchbox", "Household", 5, 10, 60, 20],
-  ["Candles 6pk", "Household", 60, 90, 4, 5],
-  ["Toothpaste", "Personal Care", 100, 140, 16, 6],
-  ["Lotion 400ml", "Personal Care", 250, 330, 8, 4],
-  ["Sanitary Pads", "Personal Care", 70, 100, 2, 8],
-  ["Razor", "Personal Care", 20, 40, 30, 10],
-  ["Cement 50kg", "Hardware", 720, 800, 30, 10],
-  ["Nails 3in kg", "Hardware", 160, 220, 12, 5],
-  ["Padlock", "Hardware", 180, 280, 0, 3],
-  ["Exercise Book", "Stationery", 35, 50, 60, 20],
-  ["Pen Blue", "Stationery", 8, 15, 100, 30],
-  ["Airtime Scratch Card", "Stationery", 95, 100, 25, 10],
+// Direct, stable Unsplash CDN URLs (not the deprecated source.unsplash.com API).
+// Each image is served at ~800px wide to keep card payloads small. If any URL
+// becomes unavailable the app shows a graceful fallback instead of breaking.
+const IMG = (id: string) =>
+  `https://images.unsplash.com/photo-${id}?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80`;
+type SeedProduct = {
+  name: string;
+  category: string;
+  unit: string;
+  buy: number;
+  sell: number;
+  qty: number;
+  min: number;
+  barcode?: string;
+  imageId: string;
+};
+const P: SeedProduct[] = [
+  { name: "Unga 2kg", category: "Groceries", unit: "kg", buy: 150, sell: 175, qty: 40, min: 10, barcode: "5000101000012", imageId: "1505242570764-6ff0315c0e71" },
+  { name: "Sugar 1kg", category: "Groceries", unit: "kg", buy: 130, sell: 160, qty: 6, min: 10, barcode: "5000101000029", imageId: "1550609962-097fce309400" },
+  { name: "Cooking Oil 1L", category: "Cooking Essentials", unit: "litre", buy: 260, sell: 310, qty: 0, min: 8, barcode: "5000101000036", imageId: "1562325230-42a4a8c6a584" },
+  { name: "Rice Pishori 2kg", category: "Groceries", unit: "kg", buy: 170, sell: 210, qty: 25, min: 8, barcode: "5000101000043", imageId: "1586201375761-83865001e358" },
+  { name: "Maize Flour 1kg", category: "Groceries", unit: "kg", buy: 70, sell: 90, qty: 50, min: 15, barcode: "5000101000050", imageId: "1528395527540-eb9c2d9b7c0d" },
+  { name: "Bread 400g", category: "Groceries", unit: "packet", buy: 55, sell: 65, qty: 12, min: 10, barcode: "5000101000067", imageId: "1514750813155-d7a5e1e0a849" },
+  { name: "Eggs Tray", category: "Groceries", unit: "carton", buy: 380, sell: 450, qty: 5, min: 5, barcode: "5000101000074", imageId: "1532737473052-d747196405f6" },
+  { name: "Salt 500g", category: "Groceries", unit: "packet", buy: 25, sell: 40, qty: 30, min: 10, barcode: "5000101000081", imageId: "1542838132-92c53300491e" },
+  { name: "Tea Leaves 250g", category: "Groceries", unit: "packet", buy: 90, sell: 120, qty: 18, min: 6, barcode: "5000101000098", imageId: "1544161516-470561b97a83" },
+  { name: "Soda 500ml", category: "Drinks & Beverages", unit: "bottle", buy: 45, sell: 60, qty: 48, min: 24, barcode: "5000201000010", imageId: "1541742458872-cead5989b4f5" },
+  { name: "Bottled Water 500ml", category: "Drinks & Beverages", unit: "bottle", buy: 30, sell: 50, qty: 3, min: 12, barcode: "5000201000027", imageId: "1559840167-733b1e1e0f4b" },
+  { name: "Juice 1L", category: "Drinks & Beverages", unit: "bottle", buy: 110, sell: 150, qty: 14, min: 6, barcode: "5000201000034", imageId: "1600891964492-431692897fe2" },
+  { name: "Milk 500ml", category: "Drinks & Beverages", unit: "bottle", buy: 55, sell: 65, qty: 0, min: 12, barcode: "5000201000041", imageId: "1528548438156-dab693e52f3c" },
+  { name: "Energy Drink", category: "Drinks & Beverages", unit: "bottle", buy: 70, sell: 100, qty: 9, min: 6, barcode: "5000201000058", imageId: "1564507592333-c60697eea623" },
+  { name: "Chapati Snack Pack", category: "Snacks", unit: "packet", buy: 30, sell: 50, qty: 20, min: 8, barcode: "5000301000018", imageId: "1567620905672-5b5e3308c0c3" },
+  { name: "Mandazi 10pcs", category: "Snacks", unit: "packet", buy: 40, sell: 70, qty: 15, min: 6, barcode: "5000301000025", imageId: "1534436050767-84997075919b" },
+  { name: "Crisps 150g", category: "Snacks", unit: "packet", buy: 60, sell: 90, qty: 25, min: 10, barcode: "5000301000032", imageId: "1544454011-3739999a82f7" },
+  { name: "Omo 1kg", category: "Cleaning Products", unit: "kg", buy: 280, sell: 340, qty: 10, min: 4, barcode: "5000401000016", imageId: "1581091226825-a6a2a5aee158" },
+  { name: "Bar Soap", category: "Household Items", unit: "piece", buy: 90, sell: 120, qty: 22, min: 8, barcode: "5000401000023", imageId: "1556228578-0d85b5f1a465" },
+  { name: "Jik 750ml", category: "Cleaning Products", unit: "bottle", buy: 120, sell: 160, qty: 7, min: 5, barcode: "5000401000030", imageId: "1558641768-533a4d2b5b1b" },
+  { name: "Toilet Paper 4pk", category: "Household Items", unit: "pack", buy: 140, sell: 190, qty: 15, min: 6, barcode: "5000401000047", imageId: "1547904781-19000a369e1f" },
+  { name: "Detergent 1kg", category: "Cleaning Products", unit: "kg", buy: 180, sell: 240, qty: 12, min: 5, barcode: "5000401000054", imageId: "1527933721751-58e6d95e9d8e" },
+  { name: "Matchbox", category: "Household Items", unit: "piece", buy: 5, sell: 10, qty: 60, min: 20, barcode: "5000401000061", imageId: "1517373171896-11f137c8c51b" },
+  { name: "Candles 6pk", category: "Household Items", unit: "pack", buy: 60, sell: 90, qty: 4, min: 5, barcode: "5000401000078", imageId: "1531483560287-1e1c8f4e68b1" },
+  { name: "Toothpaste", category: "Personal Care", unit: "piece", buy: 100, sell: 140, qty: 16, min: 6, barcode: "5000501000014", imageId: "1592175539279-4e709000214c" },
+  { name: "Shampoo 400ml", category: "Personal Care", unit: "bottle", buy: 220, sell: 300, qty: 8, min: 4, barcode: "5000501000021", imageId: "1522336769275-4d7b7b1c6a17" },
+  { name: "Lotion 400ml", category: "Personal Care", unit: "bottle", buy: 250, sell: 330, qty: 8, min: 4, barcode: "5000501000038", imageId: "1571789693351-58e71b8b052d" },
+  { name: "Sanitary Pads", category: "Personal Care", unit: "packet", buy: 70, sell: 100, qty: 2, min: 8, barcode: "5000501000045", imageId: "1543601043-7b99b9b1e1a7" },
+  { name: "Razor", category: "Personal Care", unit: "piece", buy: 20, sell: 40, qty: 30, min: 10, barcode: "5000501000052", imageId: "1589719082156-e9066d0b0f8b" },
+  { name: "Hand Sanitizer 250ml", category: "Personal Care", unit: "bottle", buy: 150, sell: 200, qty: 14, min: 6, barcode: "5000501000069", imageId: "1557384163-1a0b9e8c8e3b" },
+  { name: "Diapers (Newborn)", category: "Baby Products", unit: "pack", buy: 450, sell: 550, qty: 6, min: 4, barcode: "5000601000012", imageId: "1590470640051-6c3ef6f4b4f0" },
+  { name: "Baby Soap", category: "Baby Products", unit: "piece", buy: 110, sell: 150, qty: 10, min: 5, barcode: "5000601000029", imageId: "1534518112165-0d0c3d8e8c1b" },
+  { name: "Baby Lotion 200ml", category: "Baby Products", unit: "bottle", buy: 240, sell: 320, qty: 7, min: 4, barcode: "5000601000036", imageId: "1576096919687-20e4b0c6e76c" },
+  { name: "Infant Wipes", category: "Baby Products", unit: "pack", buy: 180, sell: 240, qty: 8, min: 4, barcode: "5000601000043", imageId: "1526552585272-22e3c6e4c3a1" },
+  { name: "Cement 50kg", category: "Hardware", unit: "kg", buy: 720, sell: 800, qty: 30, min: 10, barcode: "5000701000010", imageId: "1518189360283-8e1a0b4e6c1b" },
+  { name: "Nails 3in kg", category: "Hardware", unit: "kg", buy: 160, sell: 220, qty: 12, min: 5, barcode: "5000701000027", imageId: "1504197413875-5471b72f07e1" },
+  { name: "Padlock", category: "Hardware", unit: "piece", buy: 180, sell: 280, qty: 0, min: 3, barcode: "5000701000034", imageId: "1556761175-5973dc0f32e7" },
+  { name: "Paint Brush", category: "Hardware", unit: "piece", buy: 70, sell: 100, qty: 9, min: 5, barcode: "5000701000041", imageId: "1513461618604-6b3b8e9c8e1b" },
+  { name: "Exercise Book", category: "Stationery", unit: "piece", buy: 35, sell: 50, qty: 60, min: 20, barcode: "5000801000018", imageId: "1544947951-fa47a19c32e7" },
+  { name: "Pen Blue", category: "Stationery", unit: "piece", buy: 8, sell: 15, qty: 100, min: 30, barcode: "5000801000025", imageId: "1513461618604-6b3b8e9c8e2b" },
+  { name: "Airtime Scratch Card", category: "Stationery", unit: "piece", buy: 95, sell: 100, qty: 25, min: 10, barcode: "5000801000032", imageId: "1555650397-69d4f7b1e1a7" },
+  { name: "Notebook A4", category: "Stationery", unit: "piece", buy: 120, sell: 160, qty: 18, min: 6, barcode: "5000801000049", imageId: "1531236570241-637e956e5e1b" },
+  { name: "Pencil 12pk", category: "Stationery", unit: "pack", buy: 60, sell: 100, qty: 22, min: 8, barcode: "5000801000056", imageId: "1522364677364-824f2e8c8e1b" },
+  { name: "Body Spray", category: "Personal Care", unit: "bottle", buy: 280, sell: 380, qty: 10, min: 5, barcode: "5000501000076", imageId: "1583292072559-0b6d4f7c8e1b" },
+  { name: "Toilet Cleaner 750ml", category: "Cleaning Products", unit: "bottle", buy: 130, sell: 180, qty: 9, min: 5, barcode: "5000401000085", imageId: "1544454011-3739999a82f7" },
+  { name: "Dish Soap 500ml", category: "Cleaning Products", unit: "bottle", buy: 110, sell: 150, qty: 11, min: 5, barcode: "5000401000092", imageId: "1584446906422-349a3e6a1c0b" },
 ];
 async function main() {
   if (Number(process.env.STRESS_PRODUCT_COUNT ?? 0) > 0 && process.env.NODE_ENV === "production") {
@@ -104,20 +135,26 @@ async function main() {
   await mk("Otieno Store", "store@stockpesa.app", "0712345681", "STOREKEEPER");
   const cats: Record<string, string> = {};
   const prods: any[] = [];
-  for (const [n, c, buy, sell, qty, min] of P) {
-    cats[c] ??= (
-      await db.category.create({ data: { businessId: b.id, name: c } })
+  for (const { name, category, unit, buy, sell, qty, min, barcode, imageId } of P) {
+    cats[category] ??= (
+      await db.category.create({ data: { businessId: b.id, name: category } })
     ).id;
     const p = await db.product.create({
       data: {
         businessId: b.id,
-        categoryId: cats[c],
-        name: n,
+        categoryId: cats[category],
+        name,
         sku: "SKU" + (prods.length + 1),
+        barcode,
+        unit,
+        brand: "StockPesa",
+        description: `${name} — ${category}`,
         buyingPrice: buy,
         sellingPrice: sell,
         minStock: min,
         reorderQty: min * 3,
+        imageUrl: IMG(imageId),
+        active: true,
       },
     });
     await db.stockLevel.create({
@@ -144,7 +181,7 @@ async function main() {
       });
     prods.push(p);
   }
-  const oil = prods[P.findIndex((row) => row[0] === "Cooking Oil 1L")];
+  const oil = prods[P.findIndex((row) => row.name === "Cooking Oil 1L")];
   const oilVariant = await db.productVariant.create({
     data: {
       businessId: b.id,
@@ -183,8 +220,8 @@ async function main() {
   await db.productBundle.create({ data: { businessId: b.id, productId: stationeryBundle.id } });
   await db.bundleItem.createMany({
     data: [
-      { businessId: b.id, bundleProductId: stationeryBundle.id, componentId: prods[P.findIndex((row) => row[0] === "Exercise Book")].id, quantity: 1 },
-      { businessId: b.id, bundleProductId: stationeryBundle.id, componentId: prods[P.findIndex((row) => row[0] === "Pen Blue")].id, quantity: 1 },
+      { businessId: b.id, bundleProductId: stationeryBundle.id, componentId: prods[P.findIndex((row) => row.name === "Exercise Book")].id, quantity: 1 },
+      { businessId: b.id, bundleProductId: stationeryBundle.id, componentId: prods[P.findIndex((row) => row.name === "Pen Blue")].id, quantity: 1 },
     ],
   });
   await db.unitConversion.create({
@@ -202,12 +239,12 @@ async function main() {
     },
   });
   let customerDebt = 0;
-  const sellable = prods.filter((p) => P[prods.indexOf(p)][4] > 0);
+  const sellable = prods.filter((p) => P[prods.indexOf(p)].qty > 0);
   // Historical sales keep the levels, ledger, payments, receipts and debt consistent.
   for (let i = 0; i < 24; i++) {
     const p = sellable[i % sellable.length];
     const base = P[prods.indexOf(p)];
-    const q = Math.min(1 + (i % 3), base[4]);
+    const q = Math.min(1 + (i % 3), base.qty);
     const d = new Date(Date.now() - (i % 14) * 864e5);
     const total = Number(p.sellingPrice) * q;
     const credit = i % 8 === 0;

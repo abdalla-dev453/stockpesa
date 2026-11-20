@@ -10,6 +10,7 @@ import {
   BadRequestException,
   UseGuards,
 } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
 import { JwtService } from "@nestjs/jwt";
 import { IsEmail, IsString, MinLength, IsOptional, Matches, MaxLength, IsBoolean } from "class-validator";
 import * as bcrypt from "bcrypt";
@@ -174,13 +175,13 @@ class AuthController {
     private s: AuthService,
     private db: PrismaService,
   ) {}
-  @Post("register") register(@Body() d: RegisterDto) {
+  @Throttle({ default: { limit: 3, ttl: 1000 } }) @Post("register") register(@Body() d: RegisterDto) {
     return this.s.register(d);
   }
-  @Post("login") login(@Body() d: LoginDto) {
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) @Post("login") login(@Body() d: LoginDto) {
     return this.s.login(d);
   }
-  @Post("refresh") refresh(@Body("refreshToken") t: string) {
+  @Throttle({ default: { limit: 30, ttl: 60000 } }) @Post("refresh") refresh(@Body("refreshToken") t: string) {
     return this.s.refresh(t);
   }
   @UseGuards(AuthGuard) @Post("logout") logout(@Me() u) {

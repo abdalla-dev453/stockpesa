@@ -2,7 +2,9 @@ services:
   db:
     image: postgres:16
     environment: { POSTGRES_USER: stockpesa, POSTGRES_PASSWORD: stockpesa, POSTGRES_DB: stockpesa }
-    ports: ["5432:5432"]
+    # Host mapping is configurable: the host may already run Postgres on 5432.
+    # Inside the compose network the API always reaches the db on 5432.
+    ports: ["${PG_HOST_PORT:-5433}:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U stockpesa -d stockpesa"]
@@ -13,13 +15,21 @@ services:
     build: ./backend
     env_file: ./backend/.env
     environment:
+      # env_file sets DATABASE_URL=...@localhost:5432 for local (non-docker) runs.
+      # It must be overridden here to point at the compose service.
       DATABASE_URL: "postgresql://stockpesa:stockpesa@db:5432/stockpesa"
       NODE_ENV: development
-      SEED_DEMO: "true"
+      # Override env_file's CORS_ORIGINS without editing backend/.env.
+      # Bare hosts allow any port, e.g. WEB_ORIGINS=http://localhost,http://10.10.155.108
+      #   docker-compose up -d            (default: localhost + 127.0.0.1, any port)
+      #   WEB_ORIGINS="http://10.10.155.108" docker-compose up -d
+      CORS_ORIGINS: "${WEB_ORIGINS:-http://localhost,http://127.0.0.1}"
+      SEED_DEMO: "false"
     depends_on:
       db:
         condition: service_healthy
-    ports: ["3000:3000"]
+    ports: ["${API_HOST_PORT:-3000}:3000"]
     volumes: [uploads:/app/uploads]
+    restart: unless-stopped
     command: sh -c "npx prisma db push && if [ \"$${SEED_DEMO}\" = true ]; then npx prisma db seed; fi && node dist/src/main.js"
 volumes: { pgdata: {}, uploads: {} }

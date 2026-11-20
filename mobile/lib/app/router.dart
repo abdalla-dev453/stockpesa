@@ -12,6 +12,8 @@ import '../screens/dashboard_screen.dart';
 import '../screens/detail_screens.dart';
 import '../screens/more_screen.dart' show AlertsScreen;
 import '../screens/products_screen.dart';
+import '../screens/product_detail_screen.dart';
+import '../screens/product_editor_screen.dart';
 import '../screens/receipt_screen.dart';
 import '../screens/legal_screen.dart';
 import '../screens/market_insights_screen.dart';

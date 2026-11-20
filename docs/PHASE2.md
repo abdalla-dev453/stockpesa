@@ -12,6 +12,11 @@ Errors: 400 validation, 401 unauthenticated, 403 role, 404 missing/other-tenant,
 | GET /products, /products/:id, /products/lookup?barcode=                                       | sku=                        | all |
 | POST/PATCH/DELETE /products[/:id] (delete = archive if history, else soft-delete)             | owner, manager              |
 | POST /products/import/preview, /products/import/confirm[?skipInvalid=true] (multipart `file`) | owner, manager              |
+| GET /products/:id/images                                                                      | all                         |
+| POST /products/:id/images  {url, altText?, sortOrder?} (must be https)                        | owner, manager              |
+| POST /products/:id/images/upload (multipart `file`, jpeg/png/webp, max 5 MB)                  | owner, manager              |
+| DELETE /products/:id/images/:imageId                                                          | owner, manager              |
+| PATCH /products/:id/main-image  {imageUrl?} (set or clear main image; https required)         | owner, manager              |
 | GET /stock, /stock/:productId, /stock/movements                                               | all                         |
 | POST /stock/intake, /stock/adjustments (Idempotency-Key header)                               | owner, manager, storekeeper |
 | POST /stock-counts, PATCH /stock-counts/:id, POST /:id/complete, /:id/cancel                  | owner, manager              |
@@ -34,6 +39,16 @@ curl -s -X POST $API/stock/intake -H "$H" -H 'Idempotency-Key: intake-001' -H 'C
 curl -s -X POST $API/stock/adjustments -H "$H" -H 'Content-Type: application/json' -d "{\"productId\":\"$PID\",\"quantityChange\":-2,\"reason\":\"DAMAGE\"}"
 curl -s -F file=@products.csv $API/products/import/preview -H "$H"
 curl -s -F file=@products.csv "$API/products/import/confirm" -H "$H"
+
+# Product images (PID = product id)
+curl -s "$API/products/$PID/images" -H "$H"
+curl -s -X POST $API/products/$PID/images -H "$H" -H 'Content-Type: application/json' -d '{"url":"https://cdn.example.com/product.jpg","altText":"Unga 2kg","sortOrder":0}'
+curl -s -F file=@photo.jpg $API/products/$PID/images/upload -H "$H"
+curl -s -X DELETE $API/products/$PID/images/<imageId> -H "$H"
+curl -s -X PATCH $API/products/$PID/main-image -H "$H" -H 'Content-Type: application/json' -d '{"imageUrl":"https://cdn.example.com/main.jpg"}'
+curl -s -X PATCH $API/products/$PID/main-image -H "$H" -H 'Content-Type: application/json' -d '{"imageUrl":null}'
+
+# Product create now also accepts optional "imageUrl" (secure https URL).
 CID=$(curl -s -X POST $API/stock-counts -H "$H" -H 'Content-Type: application/json' -d '{"notes":"Friday count"}' | jq -r .id)
 curl -s -X POST $API/stock-counts/$CID/items -H "$H" -H 'Content-Type: application/json' -d "{\"productId\":\"$PID\",\"countedQuantity\":20}"
 curl -s -X POST $API/stock-counts/$CID/complete -H "$H"
