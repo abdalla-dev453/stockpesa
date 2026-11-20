@@ -1,0 +1,22 @@
+[build]
+  base = "mobile"
+  publish = "build/web"
+  # Netlify's build image does not include the Flutter SDK.
+  command = '''
+    set -eu
+    # Keep the SDK and Dart temporary files off the size-limited /tmp filesystem.
+    flutter_sdk="$(mktemp -d "$HOME/stockpesa-flutter.XXXXXX")"
+    trap 'rm -rf -- "$flutter_sdk"' EXIT
+    export TMPDIR="$flutter_sdk/tmp"
+    mkdir -p "$TMPDIR"
+    curl --fail --location --retry 3 --output "$flutter_sdk/flutter.tar.xz" https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.0-stable.tar.xz
+    printf '%s  %s\n' '26cd99d3d94b1367e6b50535a18aeef0282c10a535bbe3ec493534dcdab75296' "$flutter_sdk/flutter.tar.xz" | sha256sum --check
+    tar --extract --xz --file "$flutter_sdk/flutter.tar.xz" --directory "$flutter_sdk" --strip-components=1 --no-same-owner
+    rm -- "$flutter_sdk/flutter.tar.xz"
+    # First-run initialization clears release metadata and tries blocked Git commands.
+    cp "$flutter_sdk/bin/cache/flutter.version.json" "$flutter_sdk/release-version.json"
+    "$flutter_sdk/bin/flutter" --version --machine > /dev/null
+    cp "$flutter_sdk/release-version.json" "$flutter_sdk/bin/cache/flutter.version.json"
+    "$flutter_sdk/bin/flutter" pub get --enforce-lockfile
+    "$flutter_sdk/bin/flutter" build web --release --no-pub
+  '''
