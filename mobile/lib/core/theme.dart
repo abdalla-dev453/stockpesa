@@ -17,6 +17,14 @@ class C {
 }
 
 String kes(num v) => 'KES ${NumberFormat('#,##0.00').format(v)}';
+
+/// Theme-aware text colours: C.ink is near-black and invisible on dark
+/// surfaces, C.muted is too dim for dark backgrounds. Use these helpers in
+/// place of the raw constants so labels stay visible in both modes.
+Color inkOn(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark ? const Color(0xFFE7EFEA) : C.ink;
+Color mutedOn(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark ? const Color(0xFF9FB0A8) : C.muted;
 String businessDate(DateTime value) =>
     DateFormat('d MMM yyyy, HH:mm').format(value.toLocal());
 String formatBusinessDate(Object? value) {
@@ -45,6 +53,29 @@ ThemeData stockPesaTheme({bool dark = false}) => ThemeData(
         bodyColor: dark ? const Color(0xFFE7EFEA) : C.ink,
         displayColor: dark ? const Color(0xFFE7EFEA) : C.ink,
       ),
+  inputDecorationTheme: InputDecorationTheme(
+    labelStyle: TextStyle(color: dark ? const Color(0xFFB9C6BF) : C.muted),
+    hintStyle: TextStyle(color: dark ? const Color(0xFF8FA098) : C.muted),
+    floatingLabelStyle: TextStyle(color: dark ? const Color(0xFFB9C6BF) : C.muted),
+    filled: true,
+    fillColor: dark ? const Color(0xFF1B2A23) : Colors.white,
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: C.border)),
+    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: C.border)),
+    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: C.emerald, width: 1.6)),
+  ),
+  dropdownMenuTheme: DropdownMenuThemeData(
+    textStyle: TextStyle(color: dark ? const Color(0xFFE7EFEA) : C.ink),
+  ),
+  dialogTheme: DialogThemeData(
+    backgroundColor: dark ? const Color(0xFF14211B) : Colors.white,
+    titleTextStyle: TextStyle(
+      color: dark ? const Color(0xFFE7EFEA) : C.ink,
+      fontSize: 18,
+      fontWeight: FontWeight.w800,
+    ),
+    contentTextStyle: TextStyle(color: dark ? const Color(0xFFE7EFEA) : C.ink, fontSize: 14),
+  ),
+  bottomSheetTheme: const BottomSheetThemeData(backgroundColor: null),
   cardTheme: CardThemeData(
     color: dark ? const Color(0xFF14211B) : Colors.white,
     elevation: 1,
@@ -60,5 +91,10 @@ ThemeData stockPesaTheme({bool dark = false}) => ThemeData(
   floatingActionButtonTheme: const FloatingActionButtonThemeData(
     backgroundColor: C.coral,
     foregroundColor: Colors.white,
+  ),
+  snackBarTheme: SnackBarThemeData(
+    backgroundColor: dark ? const Color(0xFF1B2A23) : C.ink,
+    contentTextStyle: const TextStyle(color: Colors.white),
+    behavior: SnackBarBehavior.floating,
   ),
 );

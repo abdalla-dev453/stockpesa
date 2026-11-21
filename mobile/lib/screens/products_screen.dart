@@ -232,7 +232,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
     final ok = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.only(
           topLeft: Radius.circular(20),
@@ -740,7 +740,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                   child: Text(
                     'Products',
                     style: Theme.of(context).textTheme.headlineSmall
-                        ?.copyWith(fontWeight: FontWeight.w800, color: C.ink),
+                        ?.copyWith(fontWeight: FontWeight.w800, color: inkOn(context)),
                   ),
                 ),
               ],
@@ -788,7 +788,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                         icon: const Icon(Icons.arrow_forward, color: C.emerald),
                       ),
                 filled: true,
-                fillColor: Colors.white,
+                fillColor: Theme.of(context).colorScheme.surface,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(14),

@@ -18,13 +18,15 @@ class CategoryChip extends StatelessWidget {
   final VoidCallback onSelected;
 
   @override
-  Widget build(BuildContext context) => FilterChip(
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return FilterChip(
         avatar: selected ? const Icon(Icons.check, size: 16, color: Colors.white) : null,
         label: Text(
           '$name ${count > 0 ? '($count)' : ''}',
           style: TextStyle(
             fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-            color: selected ? Colors.white : C.ink,
+            color: selected ? Colors.white : colors.onSurface,
             fontSize: 13,
           ),
         ),
@@ -33,9 +35,10 @@ class CategoryChip extends StatelessWidget {
         showCheckmark: false,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         side: BorderSide(color: selected ? C.emerald : C.border, width: 1),
-        backgroundColor: Colors.white,
+        backgroundColor: colors.surface,
         selectedColor: C.emerald,
         checkmarkColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       );
+  }
 }
