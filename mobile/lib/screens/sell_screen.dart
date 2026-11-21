@@ -51,6 +51,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
   String? _checkoutKey, _checkoutFingerprint;
   String _role = '';
   bool _initialProductHandled = false;
+  late final Future<void> _restoreFuture;
 
   bool get _connected => ref
       .read(connectivityProvider)
@@ -86,7 +87,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
   void initState() {
     super.initState();
     _customerId = widget.initialCustomerId;
-    _restore();
+    _restoreFuture = _restore();
     _loadCatalog();
   }
 
@@ -152,6 +153,9 @@ class _SellScreenState extends ConsumerState<SellScreen> {
   Future<void> _loadCatalog({bool showLoading = true}) async {
     if (showLoading && mounted) setState(() => _loading = true);
     try {
+      if (!_connected) {
+        throw DioException(requestOptions: RequestOptions(path: '/products'));
+      }
       final responses = await Future.wait([
         dio.get(
           '/products',
@@ -192,27 +196,56 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         if (cached.isNotEmpty) {
           _products = cached;
           _hasCachedProducts = true;
+        } else {
+          final catalog = await _store.loadCatalog();
+          if (catalog != null) {
+            _products = (catalog['products'] as List? ?? [])
+                .map((row) => Map<String, dynamic>.from(row as Map))
+                .toList();
+            _categories = (catalog['categories'] as List? ?? [])
+                .map((row) => Map<String, dynamic>.from(row as Map))
+                .toList();
+            _hasCachedProducts = _products.isNotEmpty;
+          }
         }
-      } catch (_) {}
+      } catch (_) {
+        _loadError =
+            'The saved catalog could not be opened. Reconnect and try again.';
+      }
     }
     if (_cashReceived.text.isEmpty && _method == 'CASH' && _cart.isNotEmpty) {
       _cashReceived.text = _total.toStringAsFixed(2);
     }
     if (mounted) setState(() => _loading = false);
     if (!_initialProductHandled &&
-        (widget.initialProductId != null || widget.initialScan) &&
-        _loadError == null) {
+        (widget.initialProductId != null || widget.initialScan)) {
       _initialProductHandled = true;
+      await _restoreFuture;
+      if (!mounted) return;
       if (widget.initialScan) {
         await _scanBarcode();
       } else {
-        try {
-          final product = Map<String, dynamic>.from(
-            (await dio.get('/products/${widget.initialProductId}')).data as Map,
+        final cached = _products
+            .where(
+              (product) => product['id']?.toString() == widget.initialProductId,
+            )
+            .firstOrNull;
+        if (cached != null) {
+          await _add(cached);
+        } else if (_loadError == null) {
+          try {
+            final product = Map<String, dynamic>.from(
+              (await dio.get('/products/${widget.initialProductId}')).data
+                  as Map,
+            );
+            if (mounted) await _add(product);
+          } catch (error) {
+            if (mounted) _message(apiError(error));
+          }
+        } else if (mounted) {
+          _message(
+            'This product is not saved on this device. Reconnect to sell it.',
           );
-          if (mounted) await _add(product);
-        } catch (error) {
-          if (mounted) _message(apiError(error));
         }
       }
     }
@@ -290,74 +323,100 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         await _setQuantity(existing, _qty(existing) + 1);
         return;
       }
+      if (_connected) {
+        try {
+          final variants =
+              ((await dio.get('/products/${product['id']}/variants')).data
+                      as List)
+                  .where((value) => (value as Map)['active'] != false)
+                  .toList();
+          if (variants.isNotEmpty && mounted) {
+            final selected = await showModalBottomSheet<Map<String, dynamic>>(
+              context: context,
+              showDragHandle: true,
+              builder: (context) => SafeArea(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    const ListTile(title: Text('Choose size or type')),
+                    ...variants.map((value) {
+                      final row = Map<String, dynamic>.from(value as Map);
+                      return ListTile(
+                        title: Text(row['name']?.toString() ?? 'Variant'),
+                        subtitle: Text(
+                          '${row['quantity'] ?? 0} available · ${kes(numberValue(row['sellingPrice']))}',
+                        ),
+                        onTap: () => Navigator.pop(context, {
+                          ...row,
+                          'id': row['id'],
+                          'variantId': row['id'],
+                          'parentProductId': product['id'],
+                          'name': '${product['name']} · ${row['name']}',
+                        }),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            );
+            if (selected == null) return;
+            product = selected;
+          }
+        } catch (error) {
+          _message(apiError(error));
+          return;
+        }
+      }
+    }
+    if (_connected && product['variantId'] == null) {
       try {
-        final variants = ((await dio.get('/products/${product['id']}/variants')).data as List)
-            .where((value) => (value as Map)['active'] != false)
-            .toList();
-        if (variants.isNotEmpty && mounted) {
-          final selected = await showModalBottomSheet<Map<String, dynamic>>(
+        final baseUnit = product['unit'].toString();
+        final rows =
+            (await dio.get(
+                  '/unit-conversions',
+                  queryParameters: {'productId': product['id']},
+                )).data
+                as List;
+        final choices = <Map<String, dynamic>>[
+          {'unit': baseUnit, 'factor': 1.0},
+        ];
+        for (final value in rows) {
+          final row = value as Map;
+          if (row['productId'] != null &&
+              row['productId']?.toString() != product['id'].toString())
+            continue;
+          final multiplier = numberValue(row['multiplier']).toDouble();
+          if (row['toUnit'] == baseUnit)
+            choices.add({
+              'unit': row['fromUnit'].toString(),
+              'factor': multiplier,
+            });
+          if (row['fromUnit'] == baseUnit && multiplier != 0)
+            choices.add({
+              'unit': row['toUnit'].toString(),
+              'factor': 1 / multiplier,
+            });
+        }
+        if (choices.length > 1 && mounted) {
+          final choice = await showModalBottomSheet<Map<String, dynamic>>(
             context: context,
             showDragHandle: true,
             builder: (context) => SafeArea(
               child: ListView(
                 shrinkWrap: true,
                 children: [
-                  const ListTile(title: Text('Choose size or type')),
-                  ...variants.map((value) {
-                    final row = Map<String, dynamic>.from(value as Map);
-                    return ListTile(
-                      title: Text(row['name']?.toString() ?? 'Variant'),
+                  const ListTile(title: Text('Choose selling unit')),
+                  for (final option in choices)
+                    ListTile(
+                      title: Text(option['unit'].toString()),
                       subtitle: Text(
-                        '${row['quantity'] ?? 0} available · ${kes(numberValue(row['sellingPrice']))}',
+                        '${kes(numberValue(product['sellingPrice']) * (option['factor'] as double))} each',
                       ),
-                      onTap: () => Navigator.pop(context, {
-                        ...row,
-                        'id': row['id'],
-                        'variantId': row['id'],
-                        'parentProductId': product['id'],
-                        'name': '${product['name']} · ${row['name']}',
-                      }),
-                    );
-                  }),
+                      onTap: () => Navigator.pop(context, option),
+                    ),
                 ],
               ),
             ),
-          );
-          if (selected == null) return;
-          product = selected;
-        }
-      } catch (error) {
-        _message(apiError(error));
-        return;
-      }
-    }
-    if (product['variantId'] == null) {
-      try {
-        final baseUnit = product['unit'].toString();
-        final rows = (await dio.get('/unit-conversions', queryParameters: {'productId': product['id']})).data as List;
-        final choices = <Map<String, dynamic>>[
-          {'unit': baseUnit, 'factor': 1.0},
-        ];
-        for (final value in rows) {
-          final row = value as Map;
-          if (row['productId'] != null && row['productId']?.toString() != product['id'].toString()) continue;
-          final multiplier = numberValue(row['multiplier']).toDouble();
-          if (row['toUnit'] == baseUnit) choices.add({'unit': row['fromUnit'].toString(), 'factor': multiplier});
-          if (row['fromUnit'] == baseUnit && multiplier != 0) choices.add({'unit': row['toUnit'].toString(), 'factor': 1 / multiplier});
-        }
-        if (choices.length > 1 && mounted) {
-          final choice = await showModalBottomSheet<Map<String, dynamic>>(
-            context: context,
-            showDragHandle: true,
-            builder: (context) => SafeArea(child: ListView(shrinkWrap: true, children: [
-              const ListTile(title: Text('Choose selling unit')),
-              for (final option in choices)
-                ListTile(
-                  title: Text(option['unit'].toString()),
-                  subtitle: Text('${kes(numberValue(product['sellingPrice']) * (option['factor'] as double))} each'),
-                  onTap: () => Navigator.pop(context, option),
-                ),
-            ])),
           );
           if (choice == null) return;
           final factor = choice['factor'] as double;
@@ -596,11 +655,23 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       );
       await _add(product);
     } catch (error) {
-      if (error is DioException && error.response?.statusCode == 404) {
+      final cached = _products
+          .where((product) => product['barcode']?.toString() == code)
+          .firstOrNull;
+      if (cached != null) {
+        _message(
+          'Using the saved product record. Stock will be checked when online.',
+        );
+        await _add(cached);
+      } else if (error is DioException && error.response?.statusCode == 404) {
         _message('Barcode not found. Add a product with this barcode.');
         if (mounted) {
           context.go('/products/add?barcode=${Uri.encodeComponent(code)}');
         }
+      } else if (!_connected) {
+        _message(
+          'This barcode is not in the saved catalog. Reconnect to look it up.',
+        );
       } else {
         _message(apiError(error));
       }
@@ -855,7 +926,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         .maybeWhen(
           data: (results) =>
               results.any((value) => value != ConnectivityResult.none),
-          orElse: () => true,
+          orElse: () => false,
         );
     return _loading
         ? const Center(child: CircularProgressIndicator())
@@ -866,6 +937,23 @@ class _SellScreenState extends ConsumerState<SellScreen> {
 
   Widget _buildSaleStep(bool connected) => Column(
     children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+        child: Row(
+          children: [
+            const Icon(Icons.looks_one_outlined, color: C.emerald),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Step 1 of 2 · Choose products',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ],
+        ),
+      ),
       Padding(
         padding: const EdgeInsets.fromLTRB(14, 8, 8, 4),
         child: Row(
@@ -1001,7 +1089,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
                           '${kes(numberValue(product['sellingPrice']))}  ·  $quantity ${product['unit'] ?? 'units'} available',
                         ),
                         trailing: IconButton(
-                          tooltip: 'Add to cart',
+                          tooltip: 'Add to sale',
                           onPressed: () => _add(product),
                           icon: Icon(
                             cartQty > 0
@@ -1039,7 +1127,11 @@ class _SellScreenState extends ConsumerState<SellScreen> {
               FilledButton.icon(
                 onPressed: _cart.isEmpty ? null : _continueToPayment,
                 icon: const Icon(Icons.arrow_forward),
-                label: const Text('Continue to payment'),
+                label: Text(
+                  'Review sale · ${kes(_total)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
           ),
@@ -1058,7 +1150,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
             children: [
               Expanded(
                 child: Text(
-                  '${_cart.length} products · ${kes(_total)}',
+                  '${_cart.length} ${_cart.length == 1 ? 'product' : 'products'} in sale · ${kes(_total)}',
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
               ),
@@ -1180,6 +1272,21 @@ class _SellScreenState extends ConsumerState<SellScreen> {
               ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
             ),
           ],
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Row(
+            children: [
+              const Icon(Icons.looks_two_outlined, color: C.emerald),
+              const SizedBox(width: 8),
+              Text(
+                'Step 2 of 2 · Payment and confirmation',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+              ),
+            ],
+          ),
         ),
         Card(
           child: Padding(

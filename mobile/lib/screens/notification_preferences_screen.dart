@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/api.dart';
@@ -114,19 +115,28 @@ class _NotificationPreferencesScreenState
                   'Choose which push messages you receive. Stock and account alerts also appear in the in-app alert center.',
                 ),
               ),
-              ListTile(
-                leading: const Icon(Icons.phone_android_outlined),
-                title: const Text('This device'),
-                subtitle: Text(
-                  pushEnabled
-                      ? 'Push is enabled'
-                      : 'Enable push delivery on this device',
+              if (kIsWeb)
+                const ListTile(
+                  leading: Icon(Icons.notifications_active_outlined),
+                  title: Text('In-app alerts'),
+                  subtitle: Text(
+                    'Alerts appear here and as pop-ups while StockPesa is open. Browser push is not configured in this build.',
+                  ),
+                )
+              else
+                ListTile(
+                  leading: const Icon(Icons.phone_android_outlined),
+                  title: const Text('This device'),
+                  subtitle: Text(
+                    pushEnabled
+                        ? 'Push is enabled'
+                        : 'Enable push delivery on this device',
+                  ),
+                  trailing: FilledButton.tonal(
+                    onPressed: pushEnabled ? null : enablePush,
+                    child: Text(pushEnabled ? 'Enabled' : 'Enable'),
+                  ),
                 ),
-                trailing: FilledButton.tonal(
-                  onPressed: pushEnabled ? null : enablePush,
-                  child: Text(pushEnabled ? 'Enabled' : 'Enable'),
-                ),
-              ),
               _option(
                 'lowStock',
                 'Low stock',

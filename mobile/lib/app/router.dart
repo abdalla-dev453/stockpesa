@@ -28,6 +28,35 @@ final routerProvider = Provider<GoRouter>((ref) {
   final router = GoRouter(
     initialLocation: '/splash',
     refreshListenable: refresh,
+    errorBuilder: (context, _) => Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.link_off_outlined, size: 48),
+              const SizedBox(height: 12),
+              Text(
+                'That page isn’t available',
+                style: Theme.of(context).textTheme.titleLarge,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'The link may be incorrect or the page may have moved.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: () => context.go('/dashboard'),
+                child: const Text('Go to home'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
     redirect: (context, state) {
       final session = ref.read(sessionProvider);
       final path = state.matchedLocation;
@@ -483,14 +512,7 @@ class _SaleSuccessPageState extends State<SaleSuccessPage> {
                     onPressed: () =>
                         context.go('/sales/${widget.saleId}/receipt'),
                     icon: const Icon(Icons.receipt_long_outlined),
-                    label: const Text('View receipt'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: () =>
-                        context.go('/sales/${widget.saleId}/receipt'),
-                    icon: const Icon(Icons.share_outlined),
-                    label: const Text('Share receipt'),
+                    label: const Text('View, print or share receipt'),
                   ),
                   TextButton(
                     onPressed: () => context.go('/sell'),

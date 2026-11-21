@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,11 +7,12 @@ import 'package:go_router/go_router.dart';
 
 import '../core/network/connectivity_provider.dart';
 import '../core/notifications/push_notifications.dart';
+import '../core/theme.dart';
 import '../features/auth/presentation/auth_provider.dart';
 import '../features/insights/data/insights_repository.dart';
 import '../screens/more_screen.dart' as legacy;
 
-class StockPesaShell extends ConsumerWidget {
+class StockPesaShell extends ConsumerStatefulWidget {
   const StockPesaShell({
     super.key,
     required this.child,
@@ -17,6 +20,29 @@ class StockPesaShell extends ConsumerWidget {
   });
   final Widget child;
   final String location;
+
+  @override
+  ConsumerState<StockPesaShell> createState() => _StockPesaShellState();
+}
+
+class _StockPesaShellState extends ConsumerState<StockPesaShell> {
+  Timer? _alertPoll;
+  int? _lastUnread;
+
+  @override
+  void initState() {
+    super.initState();
+    _alertPoll = Timer.periodic(
+      const Duration(seconds: 45),
+      (_) => ref.invalidate(unreadAlertsProvider),
+    );
+  }
+
+  @override
+  void dispose() {
+    _alertPoll?.cancel();
+    super.dispose();
+  }
 
   static const destinations = [
     (
@@ -32,6 +58,7 @@ class StockPesaShell extends ConsumerWidget {
   ];
 
   int get selected {
+    final location = widget.location;
     if (location.startsWith('/products')) return 1;
     if (location.startsWith('/sell')) return 2;
     if (location.startsWith('/stock')) return 3;
@@ -39,23 +66,78 @@ class StockPesaShell extends ConsumerWidget {
     return 4;
   }
 
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    ref.listen(foregroundPushMessagesProvider, (_, state) {
-      final message = state.asData?.value;
-      if (message == null || !context.mounted) return;
-      final title = message.notification?.title;
-      final body = message.notification?.body;
-      ScaffoldMessenger.of(context).showSnackBar(
+  void _showNotification(String title, String body) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
         SnackBar(
-          content: Text(
-            [
-              title,
-              body,
-            ].whereType<String>().where((s) => s.isNotEmpty).join(' · '),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: C.ink,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          margin: const EdgeInsets.all(12),
+          duration: const Duration(seconds: 6),
+          content: Row(
+            children: [
+              const Icon(Icons.notifications_active_outlined, color: C.amber),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    Text(body, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          action: SnackBarAction(
+            label: 'View',
+            textColor: C.amber,
+            onPressed: () => context.go('/alerts'),
           ),
         ),
       );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final child = widget.child;
+    final location = widget.location;
+    ref.listen(foregroundPushMessagesProvider, (_, state) {
+      final message = state.asData?.value;
+      if (message == null || !context.mounted) return;
+      final title = message.notification?.title?.trim();
+      final body = message.notification?.body?.trim();
+      _showNotification(
+        title?.isNotEmpty == true ? title! : 'New StockPesa alert',
+        body?.isNotEmpty == true
+            ? body!
+            : 'Open your alerts to see the latest update.',
+      );
+      ref.invalidate(unreadAlertsProvider);
+    });
+    ref.listen(unreadAlertsProvider, (_, next) {
+      final current = next.asData?.value;
+      if (current == null) return;
+      final before = _lastUnread;
+      _lastUnread = current;
+      if (before != null && current > before) {
+        _showNotification(
+          'New business alert',
+          'You have $current unread alerts.',
+        );
+      }
     });
     final width = MediaQuery.sizeOf(context).width;
     final wide = width >= 600;
@@ -66,7 +148,7 @@ class StockPesaShell extends ConsumerWidget {
         .maybeWhen(
           data: (results) =>
               results.any((item) => item != ConnectivityResult.none),
-          orElse: () => true,
+          orElse: () => false,
         );
     final unread = ref.watch(unreadAlertsProvider).asData?.value ?? 0;
     final childHasAppBar =
@@ -207,7 +289,7 @@ class StockPesaShell extends ConsumerWidget {
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Offline · Your cart is saved on this device. Sales need an internet connection; nothing is queued.',
+                      'Offline · Saved products and your cart are available. Checkout needs internet; no sale is queued.',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -625,7 +707,7 @@ class _OfflineBanner extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Offline · Your cart is saved on this device. Sales need an internet connection; nothing is queued.',
+              'Offline · Saved products and your cart are available. Checkout needs internet; no sale is queued.',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,

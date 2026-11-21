@@ -20,49 +20,49 @@ Stream<void> get sessionExpiredStream => _sessionExpired.stream;
 final Dio dio = _createDio();
 
 Dio _createDio() => Dio(BaseOptions(
-  baseUrl: apiBase,
-  connectTimeout: const Duration(seconds: 8),
-  sendTimeout: const Duration(seconds: 15),
-  receiveTimeout: const Duration(seconds: 15),
-))
-  ..interceptors.add(
-    InterceptorsWrapper(
-      onRequest: (o, h) async {
-        final t = await _store.read(key: 'access');
-        if (t != null) o.headers['Authorization'] = 'Bearer $t';
-        h.next(o);
-      },
-      onError: (e, h) async {
-        // Retrying a mutation after an expired access token can duplicate a
-        // sale or stock operation. Only replay safe reads after refreshing.
-        if (e.response?.statusCode == 401 &&
-            e.requestOptions.path != '/auth/refresh' &&
-            e.requestOptions.path != '/auth/logout' &&
-            e.requestOptions.extra['sessionRetried'] != true) {
-          try {
-            _refreshFuture ??= _refreshAccessToken();
-            await _refreshFuture;
-            final access = await _store.read(key: 'access');
-            if (access == null) {
-              throw StateError('Session refresh returned no access token');
+      baseUrl: apiBase,
+      connectTimeout: const Duration(seconds: 8),
+      sendTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 15),
+    ))
+    ..interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (o, h) async {
+          final t = await _store.read(key: 'access');
+          if (t != null) o.headers['Authorization'] = 'Bearer $t';
+          h.next(o);
+        },
+        onError: (e, h) async {
+          // Retrying a mutation after an expired access token can duplicate a
+          // sale or stock operation. Only replay safe reads after refreshing.
+          if (e.response?.statusCode == 401 &&
+              e.requestOptions.path != '/auth/refresh' &&
+              e.requestOptions.path != '/auth/logout' &&
+              e.requestOptions.extra['sessionRetried'] != true) {
+            try {
+              _refreshFuture ??= _refreshAccessToken();
+              await _refreshFuture;
+              final access = await _store.read(key: 'access');
+              if (access == null) {
+                throw StateError('Session refresh returned no access token');
+              }
+              if (e.requestOptions.method.toUpperCase() == 'GET') {
+                e.requestOptions.extra['sessionRetried'] = true;
+                e.requestOptions.headers['Authorization'] = 'Bearer $access';
+                return h.resolve(await dio.fetch(e.requestOptions));
+              }
+            } catch (_) {
+              await _store.delete(key: 'access');
+              await _store.delete(key: 'refresh');
+              _sessionExpired.add(null);
+            } finally {
+              _refreshFuture = null;
             }
-            if (e.requestOptions.method.toUpperCase() == 'GET') {
-              e.requestOptions.extra['sessionRetried'] = true;
-              e.requestOptions.headers['Authorization'] = 'Bearer $access';
-              return h.resolve(await dio.fetch(e.requestOptions));
-            }
-          } catch (_) {
-            await _store.delete(key: 'access');
-            await _store.delete(key: 'refresh');
-            _sessionExpired.add(null);
-          } finally {
-            _refreshFuture = null;
           }
-        }
-        h.next(e);
-      },
-    ),
-  );
+          h.next(e);
+        },
+      ),
+    );
 
 Future<void> _refreshAccessToken() async {
   final refresh = await _store.read(key: 'refresh');
@@ -93,17 +93,43 @@ Future<Map<String, dynamic>> currentUser() async {
 
 String apiError(Object error) {
   if (error is DioException) {
+    final status = error.response?.statusCode;
+    if (status != null && status >= 500) {
+      return 'We couldn’t complete that request. Please try again.';
+    }
     final data = error.response?.data;
     if (data is Map && data['message'] != null) {
       final message = data['message'];
-      return message is List ? message.join('\n') : message.toString();
+      final text = message is List
+          ? message.join('\n').trim()
+          : message.toString().trim();
+      if (_isTechnicalError(text)) {
+        return 'We couldn’t complete that request. Please try again.';
+      }
+      return text;
     }
     if (error.response == null) {
-      return 'Cannot reach the StockPesa API at $apiBase. Check that the API is running and that this address is reachable from this device.';
+      return 'You’re offline or the server can’t be reached. Check your connection and try again.';
     }
   }
   return 'Something went wrong. Please try again.';
 }
+
+bool _isTechnicalError(String message) =>
+    RegExp(
+      r'<!doctype|<html\b|<body\b|<pre\b|<script\b|<stacktrace\b',
+      caseSensitive: false,
+      dotAll: true,
+    ).hasMatch(message) ||
+    RegExp(r'^\s*(?:at\s+\S|#\d+\s)', multiLine: true).hasMatch(message) ||
+    RegExp(
+      r'^\s*Cannot\s+(?:GET|POST|PUT|PATCH|DELETE)\s',
+      caseSensitive: false,
+    ).hasMatch(message) ||
+    RegExp(
+      r'^\s*(?:Exception|Error|TypeError|RangeError|FormatException):',
+      caseSensitive: false,
+    ).hasMatch(message);
 
 Future<bool> login(String id, String pw) async {
   final r = await dio.post(

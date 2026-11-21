@@ -11,7 +11,7 @@ class ThemeModeController extends Notifier<ThemeMode> {
   @override
   ThemeMode build() {
     Future.microtask(_restore);
-    return ThemeMode.system;
+    return ThemeMode.light;
   }
 
   Future<void> _restore() async {
@@ -19,7 +19,8 @@ class ThemeModeController extends Notifier<ThemeMode> {
     state = switch (saved) {
       'light' => ThemeMode.light,
       'dark' => ThemeMode.dark,
-      _ => ThemeMode.system,
+      'system' => ThemeMode.system,
+      _ => ThemeMode.light,
     };
   }
 

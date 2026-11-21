@@ -96,5 +96,9 @@ ThemeData stockPesaTheme({bool dark = false}) => ThemeData(
     backgroundColor: dark ? const Color(0xFF1B2A23) : C.ink,
     contentTextStyle: const TextStyle(color: Colors.white),
     behavior: SnackBarBehavior.floating,
+    showCloseIcon: true,
+    closeIconColor: Colors.white70,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    elevation: 8,
   ),
 );
