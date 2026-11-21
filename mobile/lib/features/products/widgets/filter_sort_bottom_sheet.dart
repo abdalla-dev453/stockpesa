@@ -112,15 +112,16 @@ class _FilterSortBottomSheetState extends State<FilterSortBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
     return DraggableScrollableSheet(
       expand: false,
       initialChildSize: 0.82,
       maxChildSize: 0.95,
       minChildSize: 0.5,
       builder: (_, controller) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.only(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(20),
             topRight: Radius.circular(20),
           ),
@@ -164,7 +165,7 @@ class _FilterSortBottomSheetState extends State<FilterSortBottomSheet> {
                 controller: controller,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 children: [
-                  const Text('Stock status', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: C.muted)),
+                  Text('Stock status', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: mutedOn(context))),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
@@ -177,17 +178,17 @@ class _FilterSortBottomSheetState extends State<FilterSortBottomSheet> {
                         onSelected: (_) => setState(() => _stockStatus = s),
                         selectedColor: C.emerald.withValues(alpha: 0.15),
                         labelStyle: TextStyle(
-                          color: selected ? C.emerald : C.ink,
+                          color: selected ? C.emerald : colors.onSurface,
                           fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
                         ),
                         side: BorderSide(color: selected ? C.emerald : C.border),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        backgroundColor: Colors.white,
+                        backgroundColor: colors.surface,
                       );
                     }).toList(),
                   ),
                   const SizedBox(height: 16),
-                  const Text('Category', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: C.muted)),
+                  Text('Category', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: mutedOn(context))),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String?>(
                     value: _categoryId,
@@ -210,7 +211,7 @@ class _FilterSortBottomSheetState extends State<FilterSortBottomSheet> {
                     onChanged: (v) => setState(() => _categoryId = v),
                   ),
                   const SizedBox(height: 16),
-                  const Text('Brand (optional)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: C.muted)),
+                  Text('Brand (optional)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: mutedOn(context))),
                   const SizedBox(height: 8),
                   TextFormField(
                     controller: _brandCtrl,
@@ -222,7 +223,7 @@ class _FilterSortBottomSheetState extends State<FilterSortBottomSheet> {
                     onChanged: (v) => setState(() => _brand = v.trim().isEmpty ? null : v.trim()),
                   ),
                   const SizedBox(height: 16),
-                  const Text('Price range (optional)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: C.muted)),
+                  Text('Price range (optional)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: mutedOn(context))),
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -254,7 +255,7 @@ class _FilterSortBottomSheetState extends State<FilterSortBottomSheet> {
                     ],
                   ),
                   const SizedBox(height: 20),
-                  const Text('Sort by', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: C.muted)),
+                  Text('Sort by', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: mutedOn(context))),
                   const SizedBox(height: 8),
                   RadioGroup<String>(
                     groupValue: '${_sortBy}|$_sortOrder',

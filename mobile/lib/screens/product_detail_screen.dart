@@ -267,7 +267,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                                         ),
                                         child: Text(
                                           product['category']?['name']?.toString() ?? 'Uncategorized',
-                                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: C.muted),
+                                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: mutedOn(context)),
                                         ),
                                       ),
                                       if ((product['brand'] ?? '').toString().isNotEmpty) ...[
@@ -308,15 +308,15 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                         const SizedBox(height: 10),
                         Text(
                           'SKU: ${product['sku'] ?? '—'}   ·   Barcode: ${product['barcode'] ?? '—'}   ·   Unit: ${product['unit'] ?? 'piece'}',
-                          style: const TextStyle(fontSize: 12, color: C.muted),
+                          style: TextStyle(fontSize: 12, color: mutedOn(context)),
                         ),
                         if ((product['description'] ?? '').toString().isNotEmpty) ...[
                           const SizedBox(height: 12),
-                          const Text('Description', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: C.muted)),
+                          Text('Description', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: mutedOn(context))),
                           const SizedBox(height: 6),
                           Text(
                             product['description'].toString(),
-                            style: const TextStyle(fontSize: 14, height: 1.4),
+                            style: TextStyle(fontSize: 14, height: 1.4, color: inkOn(context)),
                           ),
                         ],
                         const SizedBox(height: 16),
@@ -360,7 +360,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('Stock', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: C.muted)),
+                                Text('Stock', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: mutedOn(context))),
                                 const SizedBox(height: 12),
                                 Row(
                                   children: [
@@ -375,7 +375,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                                           const SizedBox(height: 4),
                                           Text(
                                             'Minimum level: ${minStock.toIntAsFixed(0)}',
-                                            style: const TextStyle(fontSize: 12, color: C.muted),
+                                            style: TextStyle(fontSize: 12, color: mutedOn(context)),
                                           ),
                                         ],
                                       ),
@@ -412,7 +412,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                         ),
                         const SizedBox(height: 16),
                         // Actions
-                        const Text('Actions', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: C.muted)),
+                        Text('Actions', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: mutedOn(context))),
                         const SizedBox(height: 10),
                         Row(
                           children: [
@@ -485,7 +485,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text('Images', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: C.muted)),
+                              Text('Images', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: mutedOn(context))),
                               const SizedBox(height: 8),
                               Row(
                                 children: [
@@ -508,7 +508,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                             ],
                           ),
                         // Movements
-                        const Text('Recent stock movements', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: C.muted)),
+                        Text('Recent stock movements', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: mutedOn(context))),
                         const SizedBox(height: 8),
                         if (movements.isEmpty)
                           const Card(child: ListTile(title: Text('No stock movements yet')))
@@ -533,7 +533,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                           }),
                         if (variants.isNotEmpty) ...[
                           const SizedBox(height: 16),
-                          const Text('Variants', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: C.muted)),
+                          Text('Variants', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: mutedOn(context))),
                           const SizedBox(height: 8),
                           ...variants.map((v) {
                             final variant = Map<String, dynamic>.from(v as Map);
@@ -576,7 +576,7 @@ class _ValueCard extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surface,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: C.border),
         ),
@@ -584,7 +584,7 @@ class _ValueCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(title, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: C.muted)),
+            Text(title, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: mutedOn(context))),
             const SizedBox(height: 4),
             Text(
               value,

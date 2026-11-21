@@ -225,9 +225,9 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'Main product image',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: C.muted),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: mutedOn(context)),
                   ),
                   const SizedBox(height: 10),
                   SizedBox(
@@ -289,7 +289,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
                   ),
                   if (images.isNotEmpty) ...[
                     const SizedBox(height: 10),
-                    const Text('Additional images', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: C.muted)),
+                    Text('Additional images', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: mutedOn(context))),
                     const SizedBox(height: 6),
                     SizedBox(
                       height: 64,
@@ -443,9 +443,9 @@ class _Placeholder extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.inventory_2_outlined, color: C.muted, size: 40),
+            Icon(Icons.inventory_2_outlined, color: mutedOn(context), size: 40),
             const SizedBox(height: 6),
-            Text('No image', style: TextStyle(fontSize: 12, color: C.muted)),
+            Text('No image', style: TextStyle(fontSize: 12, color: mutedOn(context))),
           ],
         ),
       );

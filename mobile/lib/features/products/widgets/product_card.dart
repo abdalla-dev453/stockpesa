@@ -153,7 +153,7 @@ class ProductCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 11,
-                        color: C.muted,
+                        color: mutedOn(context),
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -175,9 +175,9 @@ class ProductCard extends StatelessWidget {
                               const SizedBox(height: 2),
                               Text(
                                 _unitLine(),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 12,
-                                  color: C.muted,
+                                  color: mutedOn(context),
                                   fontWeight: FontWeight.w700,
                                 ),
                               ),
@@ -318,7 +318,7 @@ class _ActionBar extends StatelessWidget {
               ],
               child: Container(
                 alignment: Alignment.center,
-                child: const Icon(Icons.more_vert, size: 20, color: C.muted),
+                child: Icon(Icons.more_vert, size: 20, color: mutedOn(context)),
               ),
             ),
           ),
