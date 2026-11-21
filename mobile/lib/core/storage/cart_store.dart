@@ -8,6 +8,7 @@ class CartStore {
   static const _activeKey = 'stockpesa.active_cart';
   static const _parkedKey = 'stockpesa.parked_carts';
   static const _productsKey = 'stockpesa.cached_products';
+  static const _catalogKey = 'stockpesa.cached_catalog';
 
   Future<Map<String, dynamic>?> loadActive() async {
     final value = await _storage.read(key: _activeKey);
@@ -42,9 +43,22 @@ class CartStore {
         .toList();
   }
 
+  Future<void> saveCatalog(List<dynamic> products, List<dynamic> categories) =>
+      _storage.write(
+        key: _catalogKey,
+        value: jsonEncode({'products': products, 'categories': categories}),
+      );
+
+  Future<Map<String, dynamic>?> loadCatalog() async {
+    final value = await _storage.read(key: _catalogKey);
+    if (value == null) return null;
+    return Map<String, dynamic>.from(jsonDecode(value) as Map);
+  }
+
   Future<void> clearAll() async {
     await _storage.delete(key: _activeKey);
     await _storage.delete(key: _parkedKey);
     await _storage.delete(key: _productsKey);
+    await _storage.delete(key: _catalogKey);
   }
 }

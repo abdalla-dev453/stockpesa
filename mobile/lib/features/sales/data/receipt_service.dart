@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../core/api.dart';
@@ -197,6 +198,11 @@ class ReceiptService {
         text: 'Receipt from ${receipt.businessName}',
       ),
     );
+  }
+
+  Future<void> printPdf(ReceiptBundle receipt) async {
+    final bytes = await pdf(receipt);
+    await Printing.layoutPdf(onLayout: (_) async => bytes);
   }
 
   Future<Uri?> downloadPdf(ReceiptBundle receipt) async => FilePicker.saveFile(

@@ -23,11 +23,24 @@ async function seedStressCatalog(businessId: string, requested: number) {
     console.log(`Load test catalog: ${created}/${count} products prepared`);
   }
 }
-// Direct, stable Unsplash CDN URLs (not the deprecated source.unsplash.com API).
-// Each image is served at ~800px wide to keep card payloads small. If any URL
-// becomes unavailable the app shows a graceful fallback instead of breaking.
-const IMG = (id: string) =>
-  `https://images.unsplash.com/photo-${id}?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80`;
+// Category-specific Unsplash CDN URLs keep demo product images relevant and
+// small; ProductImage provides a fallback if an image becomes unavailable.
+const IMG = (_id: string, category: string) => {
+  const imageByCategory: Record<string, string> = {
+    Groceries: "1542838132-92c53300491e",
+    "Cooking Essentials": "1604908176997-125f25cc6f3d",
+    "Drinks & Beverages": "1602143407151-7111542de6e8",
+    Snacks: "1540189549336-e6e99c3679fe",
+    "Cleaning Products": "1608248543803-ba4f8c70ae0b",
+    "Household Items": "1578916171728-46686eac8d58",
+    "Personal Care": "1580913428735-bd3c269d6a82",
+    "Baby Products": "1596462502278-27bfdc403348",
+    Hardware: "1504148455328-c376907d081c",
+    Stationery: "1517842645767-c639042777db",
+  };
+  const id = imageByCategory[category] ?? imageByCategory.Groceries;
+  return `https://images.unsplash.com/photo-${id}?auto=format&fit=crop&w=800&q=80`;
+};
 type SeedProduct = {
   name: string;
   category: string;
@@ -93,6 +106,16 @@ async function main() {
   }
   const seeded = await db.user.findFirst({ where: { email: "owner@stockpesa.app" } });
   if (seeded) {
+    for (const [index, product] of P.entries()) {
+      await db.product.updateMany({
+        where: { businessId: seeded.businessId, sku: `SKU${index + 1}` },
+        data: { imageUrl: IMG(product.imageId, product.category) },
+      });
+    }
+    await db.product.updateMany({
+      where: { businessId: seeded.businessId, sku: "BUNDLE-SCHOOL-01" },
+      data: { imageUrl: IMG("", "Stationery") },
+    });
     const count = Number(process.env.STRESS_PRODUCT_COUNT ?? 0);
     if (count > 0) await seedStressCatalog(seeded.businessId, count);
     console.log("StockPesa demo data already exists; skipping seed.");
@@ -153,7 +176,7 @@ async function main() {
         sellingPrice: sell,
         minStock: min,
         reorderQty: min * 3,
-        imageUrl: IMG(imageId),
+        imageUrl: IMG(imageId, category),
         active: true,
       },
     });
@@ -215,6 +238,7 @@ async function main() {
       unit: "pack",
       buyingPrice: 51,
       sellingPrice: 70,
+      imageUrl: IMG("", "Stationery"),
     },
   });
   await db.productBundle.create({ data: { businessId: b.id, productId: stationeryBundle.id } });

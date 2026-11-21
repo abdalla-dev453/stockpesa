@@ -31,17 +31,85 @@ class BarcodeScanScreen extends StatefulWidget {
 
 class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
   bool scanned = false;
+
+  Future<void> _enterManually() async {
+    final controller = TextEditingController();
+    final code = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Enter barcode'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textInputAction: TextInputAction.done,
+          decoration: const InputDecoration(
+            labelText: 'Barcode',
+            prefixIcon: Icon(Icons.qr_code_2_outlined),
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Use barcode'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (code != null && code.isNotEmpty && mounted) {
+      Navigator.pop(context, code);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Scan barcode')),
-    body: MobileScanner(
-      onDetect: (capture) {
-        if (scanned) return;
-        final code = capture.barcodes.firstOrNull?.rawValue;
-        if (code == null || code.isEmpty) return;
-        scanned = true;
-        Navigator.pop(context, code);
-      },
+    body: Stack(
+      children: [
+        MobileScanner(
+          errorBuilder: (_, _) => Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.no_photography_outlined, size: 44),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Camera access is unavailable. Enter the barcode instead.',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          onDetect: (capture) {
+            if (scanned) return;
+            final code = capture.barcodes.firstOrNull?.rawValue;
+            if (code == null || code.isEmpty) return;
+            scanned = true;
+            Navigator.pop(context, code);
+          },
+        ),
+        Positioned(
+          left: 16,
+          right: 16,
+          bottom: 20,
+          child: Center(
+            child: FilledButton.tonalIcon(
+              onPressed: _enterManually,
+              icon: const Icon(Icons.keyboard_outlined),
+              label: const Text('Enter barcode manually'),
+            ),
+          ),
+        ),
+      ],
     ),
   );
 }
@@ -56,6 +124,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
   List<dynamic> categories = [];
   bool loading = true;
   bool loadingMore = false;
+  bool _usingCache = false;
   String? loadError;
   String status = 'ALL';
   String? categoryId;
@@ -69,6 +138,81 @@ class _ProductsScreenState extends State<ProductsScreen> {
   String? userRole;
 
   bool get hasMore => page < totalPages;
+  bool get _defaultCatalogView =>
+      search.text.trim().isEmpty &&
+      categoryId == null &&
+      status == 'ALL' &&
+      brand == null &&
+      priceMin == null &&
+      priceMax == null &&
+      sortBy == 'name' &&
+      sortOrder == 'ASC';
+
+  Future<void> _cacheCatalog() async {
+    try {
+      await _store.saveCatalog(
+        products,
+        categories
+            .map((category) => Map<String, dynamic>.from(category as Map))
+            .toList(),
+      );
+    } catch (_) {
+      if (mounted) _message('Could not save products for offline browsing.');
+    }
+  }
+
+  List<Map<String, dynamic>> _filterCachedProducts(
+    List<Map<String, dynamic>> cached,
+  ) {
+    final term = search.text.trim().toLowerCase();
+    final selectedBrand = brand?.toLowerCase();
+    final filtered = cached.where((product) {
+      final category = product['category'];
+      final productCategoryId = category is Map
+          ? category['id']?.toString()
+          : product['categoryId']?.toString();
+      if (categoryId != null && productCategoryId != categoryId) return false;
+      if (term.isNotEmpty &&
+          ![product['name'], product['sku'], product['barcode']].any(
+            (value) => value?.toString().toLowerCase().contains(term) == true,
+          )) {
+        return false;
+      }
+      if (selectedBrand != null &&
+          !(product['brand']?.toString().toLowerCase().contains(
+                selectedBrand,
+              ) ??
+              false)) {
+        return false;
+      }
+      final price = numberValue(product['sellingPrice']);
+      if (priceMin != null && price < priceMin!) return false;
+      if (priceMax != null && price > priceMax!) return false;
+      final quantity = numberValue(product['quantity']);
+      final minimum = numberValue(product['minStock']);
+      if (status == 'IN_STOCK' && quantity <= minimum) return false;
+      if (status == 'LOW_STOCK' && (quantity <= 0 || quantity > minimum)) {
+        return false;
+      }
+      if (status == 'OUT_OF_STOCK' && quantity > 0) return false;
+      return true;
+    }).toList();
+    filtered.sort((a, b) {
+      final comparison = switch (sortBy) {
+        'quantity' || 'stockQuantity' => numberValue(
+          a['quantity'],
+        ).compareTo(numberValue(b['quantity'])),
+        'price' || 'sellingPrice' => numberValue(
+          a['sellingPrice'],
+        ).compareTo(numberValue(b['sellingPrice'])),
+        _ => (a['name']?.toString() ?? '').toLowerCase().compareTo(
+          (b['name']?.toString() ?? '').toLowerCase(),
+        ),
+      };
+      return sortOrder == 'DESC' ? -comparison : comparison;
+    });
+    return filtered;
+  }
 
   @override
   void initState() {
@@ -111,7 +255,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
   }
 
   Future<void> _loadMore() async {
-    if (loadingMore || !hasMore) return;
+    if (loadingMore || !hasMore || _usingCache) return;
     setState(() => loadingMore = true);
     try {
       final response = await dio.get(
@@ -126,7 +270,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
           if (brand != null && brand!.isNotEmpty) 'brand': brand,
           if (priceMin != null) 'priceMin': priceMin,
           if (priceMax != null) 'priceMax': priceMax,
-          'sortBy': sortBy == 'quantity' ? 'stockQuantity' : sortBy == 'price' ? 'sellingPrice' : sortBy,
+          'sortBy': sortBy == 'quantity'
+              ? 'stockQuantity'
+              : sortBy == 'price'
+              ? 'sellingPrice'
+              : sortBy,
           'sortOrder': sortOrder,
         },
       );
@@ -139,6 +287,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
           page++;
           loadingMore = false;
         });
+        if (_defaultCatalogView) await _cacheCatalog();
       }
     } catch (e) {
       if (mounted) setState(() => loadingMore = false);
@@ -166,7 +315,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
             if (brand != null && brand!.isNotEmpty) 'brand': brand,
             if (priceMin != null) 'priceMin': priceMin,
             if (priceMax != null) 'priceMax': priceMax,
-            'sortBy': sortBy == 'quantity' ? 'stockQuantity' : sortBy == 'price' ? 'sellingPrice' : sortBy,
+            'sortBy': sortBy == 'quantity'
+                ? 'stockQuantity'
+                : sortBy == 'price'
+                ? 'sellingPrice'
+                : sortBy,
             'sortOrder': sortOrder,
           },
         ),
@@ -180,8 +333,37 @@ class _ProductsScreenState extends State<ProductsScreen> {
       ).toInt().clamp(1, 999999);
       categories = responses[1].data as List;
       loadError = null;
+      _usingCache = false;
+      if (_defaultCatalogView) await _cacheCatalog();
     } catch (e) {
-      loadError = apiError(e);
+      try {
+        final cached = await _store.loadCatalog();
+        if (cached == null) {
+          final saleProducts = await _store.loadProducts();
+          if (saleProducts.isEmpty) {
+            loadError = apiError(e);
+          } else {
+            products = _filterCachedProducts(saleProducts);
+            totalPages = 1;
+            loadError = null;
+            _usingCache = true;
+          }
+        } else {
+          final cachedProducts = (cached['products'] as List? ?? [])
+              .map((row) => Map<String, dynamic>.from(row as Map))
+              .toList();
+          categories = (cached['categories'] as List? ?? [])
+              .map((row) => Map<String, dynamic>.from(row as Map))
+              .toList();
+          products = _filterCachedProducts(cachedProducts);
+          totalPages = 1;
+          loadError = null;
+          _usingCache = true;
+        }
+      } catch (_) {
+        loadError =
+            'Products are unavailable offline. Reconnect and try again.';
+      }
     }
     if (mounted) setState(() => loading = false);
   }
@@ -266,7 +448,9 @@ class _ProductsScreenState extends State<ProductsScreen> {
                 const SizedBox(height: 10),
                 TextField(
                   controller: sku,
-                  decoration: const InputDecoration(labelText: 'SKU (optional)'),
+                  decoration: const InputDecoration(
+                    labelText: 'SKU (optional)',
+                  ),
                 ),
                 const SizedBox(height: 10),
                 TextField(
@@ -278,7 +462,9 @@ class _ProductsScreenState extends State<ProductsScreen> {
                 const SizedBox(height: 10),
                 TextField(
                   controller: brandCtrl,
-                  decoration: const InputDecoration(labelText: 'Brand (optional)'),
+                  decoration: const InputDecoration(
+                    labelText: 'Brand (optional)',
+                  ),
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<String?>(
@@ -289,15 +475,13 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       value: null,
                       child: Text('No category'),
                     ),
-                    ...categories.map(
-                      (c) {
-                        final row = Map<String, dynamic>.from(c as Map);
-                        return DropdownMenuItem<String?>(
-                          value: row['id'].toString(),
-                          child: Text(row['name'].toString()),
-                        );
-                      },
-                    ),
+                    ...categories.map((c) {
+                      final row = Map<String, dynamic>.from(c as Map);
+                      return DropdownMenuItem<String?>(
+                        value: row['id'].toString(),
+                        child: Text(row['name'].toString()),
+                      );
+                    }),
                   ],
                   onChanged: (v) => setSheet(() => categoryIdLocal = v),
                 ),
@@ -305,21 +489,25 @@ class _ProductsScreenState extends State<ProductsScreen> {
                 DropdownButtonFormField<String>(
                   initialValue: unit,
                   decoration: const InputDecoration(labelText: 'Unit'),
-                  items: const [
-                        'piece',
-                        'kg',
-                        'gram',
-                        'litre',
-                        'millilitre',
-                        'packet',
-                        'carton',
-                        'bale',
-                        'dozen',
-                        'bottle',
-                        'pack',
-                        'other'
-                      ].map((v) => DropdownMenuItem(value: v, child: Text(v)))
-                      .toList(),
+                  items:
+                      const [
+                            'piece',
+                            'kg',
+                            'gram',
+                            'litre',
+                            'millilitre',
+                            'packet',
+                            'carton',
+                            'bale',
+                            'dozen',
+                            'bottle',
+                            'pack',
+                            'other',
+                          ]
+                          .map(
+                            (v) => DropdownMenuItem(value: v, child: Text(v)),
+                          )
+                          .toList(),
                   onChanged: (v) => setSheet(() => unit = v ?? 'piece'),
                 ),
                 const SizedBox(height: 10),
@@ -357,8 +545,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
                   onPressed: () async {
-                    final result = await FilePicker.pickFiles(type: FileType.image);
-                    if (result.isNotEmpty) setSheet(() => productPhoto = result.single);
+                    final result = await FilePicker.pickFiles(
+                      type: FileType.image,
+                    );
+                    if (result.isNotEmpty)
+                      setSheet(() => productPhoto = result.single);
                   },
                   icon: const Icon(Icons.add_a_photo_outlined),
                   label: Text(
@@ -414,9 +605,12 @@ class _ProductsScreenState extends State<ProductsScreen> {
                         '/products',
                         data: {
                           'name': name.text.trim(),
-                          'sku': sku.text.trim().isEmpty ? null : sku.text.trim(),
-                          'barcode':
-                              barcode.text.trim().isEmpty ? null : barcode.text.trim(),
+                          'sku': sku.text.trim().isEmpty
+                              ? null
+                              : sku.text.trim(),
+                          'barcode': barcode.text.trim().isEmpty
+                              ? null
+                              : barcode.text.trim(),
                           'brand': brandCtrl.text.trim().isEmpty
                               ? null
                               : brandCtrl.text.trim(),
@@ -438,13 +632,16 @@ class _ProductsScreenState extends State<ProductsScreen> {
                             '/products/${created.data['id']}/images/upload',
                             data: FormData.fromMap({
                               'file': MultipartFile.fromBytes(
-                                  bytes, filename: productPhoto!.name),
+                                bytes,
+                                filename: productPhoto!.name,
+                              ),
                             }),
                           );
                         } catch (e) {
                           if (mounted) {
                             _message(
-                                'Product created, but its photo could not be uploaded: ${apiError(e)}');
+                              'Product created, but its photo could not be uploaded: ${apiError(e)}',
+                            );
                           }
                         }
                       }
@@ -643,8 +840,9 @@ class _ProductsScreenState extends State<ProductsScreen> {
                   data: {
                     'name': name.text.trim(),
                     'sku': sku.text.trim().isEmpty ? null : sku.text.trim(),
-                    'barcode':
-                        barcode.text.trim().isEmpty ? null : barcode.text.trim(),
+                    'barcode': barcode.text.trim().isEmpty
+                        ? null
+                        : barcode.text.trim(),
                     'buyingPrice': b,
                     'sellingPrice': s,
                     'minStock': m,
@@ -704,110 +902,96 @@ class _ProductsScreenState extends State<ProductsScreen> {
     }
   }
 
-  Future<void> _quickAddToCart(Map<String, dynamic> product) async {
-    try {
-      final active = await _store.loadActive();
-      final items = (active?['items'] as List? ?? [])
-          .map((e) => Map<String, dynamic>.from(e as Map))
-          .toList();
-      final id = product['id'].toString();
-      final existing = items.indexWhere((i) => i['id']?.toString() == id);
-      if (existing >= 0) {
-        items[existing]['_qty'] = (numberValue(items[existing]['_qty']) + 1).toInt();
-      } else {
-        items.add({...product, '_qty': 1});
-      }
-      final cart = <String, dynamic>{};
-      if (active != null) cart.addAll(active);
-      cart['items'] = items;
-      await _store.saveActive(cart);
-      if (mounted) {
-        _message('${product['name']} added to cart');
-      }
-    } catch (e) {
-      if (mounted) _message(apiError(e));
+  void _startSale(Map<String, dynamic> product) {
+    final id = product['id']?.toString();
+    if (id == null || id.isEmpty) {
+      _message('This product cannot be sold right now.');
+      return;
     }
+    context.go('/sell?productId=${Uri.encodeComponent(id)}');
   }
 
   Widget _buildHeader() => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Products',
-                    style: Theme.of(context).textTheme.headlineSmall
-                        ?.copyWith(fontWeight: FontWeight.w800, color: inkOn(context)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-            child: TextField(
-              controller: search,
-              onChanged: (_) {
-                _searchDebounce?.cancel();
-                _searchDebounce = Timer(
-                  const Duration(milliseconds: 300),
-                  () {
-                    page = 1;
-                    load();
-                  },
-                );
-              },
-              onSubmitted: (_) {
-                _searchDebounce?.cancel();
-                page = 1;
-                load();
-              },
-              decoration: InputDecoration(
-                hintText: 'Search name, SKU or barcode',
-                hintStyle: const TextStyle(color: C.muted, fontSize: 14),
-                prefixIcon: const Icon(Icons.search, color: C.muted),
-                suffixIcon: search.text.isNotEmpty
-                    ? IconButton(
-                        onPressed: () {
-                          _searchDebounce?.cancel();
-                          search.clear();
-                          page = 1;
-                          load();
-                        },
-                        icon: const Icon(Icons.clear, color: C.muted),
-                      )
-                    : IconButton(
-                        onPressed: () {
-                          _searchDebounce?.cancel();
-                          page = 1;
-                          load();
-                        },
-                        icon: const Icon(Icons.arrow_forward, color: C.emerald),
-                      ),
-                filled: true,
-                fillColor: Theme.of(context).colorScheme.surface,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide(color: C.border),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide(color: C.border),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: const BorderSide(color: C.emerald),
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Products',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: inkOn(context),
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+        child: TextField(
+          controller: search,
+          onChanged: (_) {
+            _searchDebounce?.cancel();
+            _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+              page = 1;
+              load();
+            });
+          },
+          onSubmitted: (_) {
+            _searchDebounce?.cancel();
+            page = 1;
+            load();
+          },
+          decoration: InputDecoration(
+            hintText: 'Search name, SKU or barcode',
+            hintStyle: const TextStyle(color: C.muted, fontSize: 14),
+            prefixIcon: const Icon(Icons.search, color: C.muted),
+            suffixIcon: search.text.isNotEmpty
+                ? IconButton(
+                    onPressed: () {
+                      _searchDebounce?.cancel();
+                      search.clear();
+                      page = 1;
+                      load();
+                    },
+                    icon: const Icon(Icons.clear, color: C.muted),
+                  )
+                : IconButton(
+                    onPressed: () {
+                      _searchDebounce?.cancel();
+                      page = 1;
+                      load();
+                    },
+                    icon: const Icon(Icons.arrow_forward, color: C.emerald),
+                  ),
+            filled: true,
+            fillColor: Theme.of(context).colorScheme.surface,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 14,
+            ),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide(color: C.border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide(color: C.border),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: C.emerald),
+            ),
           ),
-          const SizedBox(height: 4),
-        ],
-      );
+        ),
+      ),
+      const SizedBox(height: 4),
+    ],
+  );
 
   Widget _buildCategoryChips() {
     final allCount = products.length;
@@ -858,20 +1042,36 @@ class _ProductsScreenState extends State<ProductsScreen> {
   }
 
   Widget _buildGrid() {
-    final crossAxisCount = MediaQuery.of(context).size.width >= 700 ? 3 : 2;
+    final width = MediaQuery.sizeOf(context).width;
+    final crossAxisCount = width < 360
+        ? 1
+        : width >= 1100
+        ? 4
+        : width >= 700
+        ? 3
+        : 2;
+    final cardAspectRatio = width < 360
+        ? 0.68
+        : width < 700
+        ? 0.51
+        : width < 1100
+        ? 0.57
+        : 0.66;
     return GridView.builder(
       controller: _scrollController,
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 100),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: crossAxisCount,
-        childAspectRatio: 0.72,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
+        childAspectRatio: cardAspectRatio,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 18,
       ),
       itemCount: products.length + (loadingMore ? 1 : 0),
       itemBuilder: (context, i) {
         if (i == products.length) {
-          return const Center(child: SizedBox(height: 60, child: CircularProgressIndicator()));
+          return const Center(
+            child: SizedBox(height: 60, child: CircularProgressIndicator()),
+          );
         }
         final p = products[i];
         return ProductCard(
@@ -879,7 +1079,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
           product: p,
           userRole: userRole,
           onTap: () => context.go('/products/${p['id']}'),
-          onQuickAdd: () => _quickAddToCart(p),
+          onSell: () => _startSale(p),
           onEdit: () => editProduct(p),
           onReceiveStock: () {
             _message('Open receive stock for ${p['name']}');
@@ -920,7 +1120,13 @@ class _ProductsScreenState extends State<ProductsScreen> {
                 _message('${p['name']} · ${p['quantity']} in stock');
                 await load();
               } catch (e) {
-                if (e is DioException && e.response?.statusCode == 404) {
+                final cached = products
+                    .where((product) => product['barcode']?.toString() == code)
+                    .firstOrNull;
+                if (cached != null) {
+                  _message('Showing the saved product record.');
+                  _startSale(cached);
+                } else if (e is DioException && e.response?.statusCode == 404) {
                   _message(
                     'No product found. Add this barcode to a new product.',
                   );
@@ -948,6 +1154,28 @@ class _ProductsScreenState extends State<ProductsScreen> {
         children: [
           _buildHeader(),
           _buildCategoryChips(),
+          if (_usingCache)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.fromLTRB(16, 2, 16, 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF0CC),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.cloud_off_outlined, size: 18),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Offline · showing saved products. Stock may have changed; sales need a connection.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Expanded(
             child: loading
                 ? ListView(

@@ -23,7 +23,7 @@ Android permits cleartext HTTP only in the debug manifest for local API testing;
 
 Firebase Messaging is optional until Firebase values are configured. Initialize a Firebase Android/iOS app, enable Cloud Messaging, and build with `FIREBASE_PROJECT_ID`, `FIREBASE_MESSAGING_SENDER_ID`, `FIREBASE_API_KEY`, and the matching `FIREBASE_ANDROID_APP_ID` or `FIREBASE_IOS_APP_ID` dart-defines. iOS also needs `FIREBASE_IOS_BUNDLE_ID`, the Push Notifications capability, and an APNs key configured in Firebase. Never put service-account credentials in the mobile build; the API receives `FIREBASE_SERVICE_ACCOUNT_JSON` from a deployment secret manager.
 
-The app asks notification permission from Settings → Notification preferences, registers authorized tokens with the authenticated API, handles foreground messages, routes notification taps, and revokes the token on sign out. The API outbox sends low/out-of-stock transition messages to opted-in business users and deactivates invalid tokens. Other event types can be controlled in preferences but require their event producers before delivery is active.
+The app asks notification permission from Settings → Notification preferences, registers authorized tokens with the authenticated API, handles foreground messages, routes notification taps, and revokes the token on sign out. The API outbox sends low/out-of-stock transition messages to opted-in business users and deactivates invalid tokens. In-app alerts are checked while the app is open and displayed in a pop-up; browser push is not configured in this build. Other event types can be controlled in preferences but require their event producers before delivery is active.
 
 ## Structure
 
@@ -61,14 +61,14 @@ Repositories keep endpoint calls out of new presentation code. The legacy screen
 | `/categories` | Product categories |
 | `/alerts`, `/reports`, `/market-insights`, `/settings`, `/notification-settings`, `/staff`, `/privacy`, `/terms`, `/more` | Business alerts/insights, preferences, legal templates, profile, roles and management links |
 
-On screens narrower than 600 logical pixels, navigation uses a bottom bar. Wider layouts use a navigation rail. Users can follow system appearance or select light/dark mode in settings.
+On screens narrower than 600 logical pixels, navigation uses a bottom bar. Wider layouts use a navigation rail. The default appearance is light; users can select system or dark mode in settings.
 
 ## Screen descriptions
 
 - **Home:** current-day/month sales, stock warnings, unread alert count, and shortcuts into selling and inventory.
 - **Products:** searchable catalogue with stock/category filters, product detail/edit, barcode scan/create, and CSV import. Product details can manage variants and their stock, bundle contents, image URLs, tags, promotions, and unit conversions, and review price changes.
-- **Sell:** searchable/scannable catalogue and editable cart, saved/parked carts, discount, payment selection, customer credit checks, cash change, and idempotent checkout. Products with variants prompt for the option; scanning a variant barcode selects it directly. The payment step clearly shows server-side payment limitations.
-- **Receipt:** backend receipt snapshot rendered as a preview with PDF share/download and a text summary. Print integration is identified as unavailable.
+- **Sell:** searchable/scannable catalogue and editable cart, saved/parked carts, discount, payment selection, customer credit checks, cash change, and idempotent checkout. The flow labels product selection and payment as separate steps. Products with variants prompt for the option; scanning a variant barcode selects it directly, with manual barcode entry as a camera fallback. The payment step clearly shows server-side payment limitations.
+- **Receipt:** backend receipt snapshot rendered as a preview with PDF printing, sharing/download, and a text summary.
 - **Customers:** search/edit, debt-only filter, unpaid and recent purchases, payment recording, and customer-prefilled sale start.
 - **Sales history:** transaction actions include receipt, sharing, and a quantity-limited return with explicit restock choice and recorded refund/balance summary.
 - **Inventory and alerts:** stock intake, adjustment, movement history, counts, low/out-of-stock filters, read state, and product navigation.
@@ -95,7 +95,7 @@ Reports use live `/reports/*` responses and are role-aware: cashiers see dashboa
 
 The checkout supports cash received/change, manual M-Pesa receipt recording, M-Pesa mock confirmation, bank, card, and credit sales. Manual M-Pesa requires a 6–32 character alphanumeric receipt and received amount; partial payment requires a customer account, and the business cannot reuse a receipt number. This records a payment already received and does not initiate STK Push. The mock flow remains pending until the signed demo callback settles it. The server sale DTO still has no bank/card reference input or tax configuration. Return refunds use the backend's original-payment-method behavior; the API has no refund-method selector. Return quantities and restocking are submitted to the transactional return endpoint, which is restricted to owners and managers. Staff creation, editing, and deactivation are owner-only. The API has no staff reactivation route.
 
-Offline mode preserves the active and parked carts and a catalogue cache on-device. Checkout is disabled offline and no sale is queued, because there is no server reconciliation endpoint. Password reset, remote receipt printing, logo upload, tax configuration, language selection, and custom low-stock defaults are not exposed by the current API.
+Offline mode preserves active and parked carts and a catalogue cache on-device for browsing. Checkout is disabled offline and no sale is queued, because there is no server reconciliation endpoint; stock and payments are revalidated by the API when online. Password reset, logo upload, tax configuration, language selection, and custom low-stock defaults are not exposed by the current API.
 
 ## Manual smoke test
 

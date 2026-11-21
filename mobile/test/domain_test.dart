@@ -1,4 +1,6 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:stockpesa/core/api.dart';
 import 'package:stockpesa/core/theme.dart';
 import 'package:stockpesa/core/validation.dart';
 import 'package:stockpesa/features/sales/domain/sale_math.dart';
@@ -49,6 +51,37 @@ void main() {
       expect(validateNonNegativeMoney('10.25'), isNull);
       expect(validateNonNegativeMoney('-1'), isNotNull);
       expect(validateNonNegativeMoney('1.001'), isNotNull);
+    });
+  });
+
+  group('user-facing API errors', () {
+    test('replaces HTML responses with a friendly message', () {
+      final request = RequestOptions(path: '/products');
+      final error = DioException(
+        requestOptions: request,
+        response: Response(
+          requestOptions: request,
+          statusCode: 400,
+          data: {'message': '<html><body>Proxy failure</body></html>'},
+        ),
+      );
+
+      expect(apiError(error), isNot(contains('<html>')));
+      expect(apiError(error), contains('Please try again'));
+    });
+
+    test('preserves ordinary validation messages', () {
+      final request = RequestOptions(path: '/products');
+      final error = DioException(
+        requestOptions: request,
+        response: Response(
+          requestOptions: request,
+          statusCode: 400,
+          data: {'message': 'Product name is required'},
+        ),
+      );
+
+      expect(apiError(error), 'Product name is required');
     });
   });
 }

@@ -182,9 +182,9 @@ class _ReceiptPreviewScreenState extends State<ReceiptPreviewScreen> {
                   label: const Text('Share summary'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: null,
+                  onPressed: busy ? null : () => _action(service.printPdf),
                   icon: Icon(Icons.print_outlined),
-                  label: Text('Print · Coming soon'),
+                  label: Text('Print receipt'),
                 ),
               ],
             ),
