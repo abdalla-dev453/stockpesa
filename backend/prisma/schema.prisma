@@ -69,20 +69,20 @@ model Business {
 }
 
 model User {
-  id              String    @id @default(uuid()) @db.Uuid
-  businessId      String    @db.Uuid
-  fullName        String
-  phone           String    @unique
-  email           String    @unique
-  passwordHash    String
-  refreshHash     String?
-  role            Role
-  deletedAt       DateTime?
-  termsAcceptedAt DateTime?
-  termsVersion    String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  business        Business  @relation(fields: [businessId], references: [id])
+  id                   String                @id @default(uuid()) @db.Uuid
+  businessId           String                @db.Uuid
+  fullName             String
+  phone                String                @unique
+  email                String                @unique
+  passwordHash         String
+  refreshHash          String?
+  role                 Role
+  deletedAt            DateTime?
+  termsAcceptedAt      DateTime?
+  termsVersion         String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  business             Business              @relation(fields: [businessId], references: [id])
   dashboardPreferences DashboardPreference[]
 
   @@index([businessId])
@@ -342,21 +342,38 @@ model StockMovement {
 }
 
 model Customer {
-  id          String    @id @default(uuid()) @db.Uuid
-  businessId  String    @db.Uuid
-  name        String
-  phone       String?
-  notes       String?
-  creditLimit Decimal?  @db.Decimal(14, 2)
-  balance     Decimal   @default(0) @db.Decimal(14, 2)
-  deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  business    Business  @relation(fields: [businessId], references: [id])
-  sales       Sale[]
-  payments    Payment[]
+  id            String              @id @default(uuid()) @db.Uuid
+  businessId    String              @db.Uuid
+  name          String
+  phone         String?
+  notes         String?
+  creditLimit   Decimal?            @db.Decimal(14, 2)
+  balance       Decimal             @default(0) @db.Decimal(14, 2)
+  loyaltyPoints Int                 @default(0)
+  deletedAt     DateTime?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  business      Business            @relation(fields: [businessId], references: [id])
+  sales         Sale[]
+  payments      Payment[]
+  loyalty       LoyaltyAdjustment[]
 
   @@index([businessId])
+}
+
+model LoyaltyAdjustment {
+  id             String   @id @default(uuid()) @db.Uuid
+  businessId     String   @db.Uuid
+  customerId     String   @db.Uuid
+  userId         String   @db.Uuid
+  points         Int
+  reason         String?
+  idempotencyKey String?
+  createdAt      DateTime @default(now())
+  customer       Customer @relation(fields: [customerId], references: [id])
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId, customerId, createdAt])
 }
 
 model Sale {
@@ -391,23 +408,23 @@ model Sale {
 }
 
 model SaleItem {
-  id          String          @id @default(uuid()) @db.Uuid
-  saleId      String          @db.Uuid
-  businessId  String          @db.Uuid
-  productId   String          @db.Uuid
-  variantId   String?         @db.Uuid
-  quantity    Decimal         @db.Decimal(14, 3)
-  unit        String?
-  stockQuantity Decimal      @db.Decimal(14, 3)
-  returnedQty Decimal         @default(0) @db.Decimal(14, 3)
-  unitPrice   Decimal         @db.Decimal(14, 2)
-  unitCost    Decimal         @db.Decimal(14, 2)
-  discount    Decimal         @default(0) @db.Decimal(14, 2)
-  lineTotal   Decimal         @db.Decimal(14, 2)
-  sale        Sale            @relation(fields: [saleId], references: [id])
-  product     Product         @relation(fields: [productId], references: [id])
-  variant     ProductVariant? @relation(fields: [variantId], references: [id])
-  returns     ReturnItem[]
+  id            String          @id @default(uuid()) @db.Uuid
+  saleId        String          @db.Uuid
+  businessId    String          @db.Uuid
+  productId     String          @db.Uuid
+  variantId     String?         @db.Uuid
+  quantity      Decimal         @db.Decimal(14, 3)
+  unit          String?
+  stockQuantity Decimal         @db.Decimal(14, 3)
+  returnedQty   Decimal         @default(0) @db.Decimal(14, 3)
+  unitPrice     Decimal         @db.Decimal(14, 2)
+  unitCost      Decimal         @db.Decimal(14, 2)
+  discount      Decimal         @default(0) @db.Decimal(14, 2)
+  lineTotal     Decimal         @db.Decimal(14, 2)
+  sale          Sale            @relation(fields: [saleId], references: [id])
+  product       Product         @relation(fields: [productId], references: [id])
+  variant       ProductVariant? @relation(fields: [variantId], references: [id])
+  returns       ReturnItem[]
 
   @@index([businessId])
   @@index([productId])

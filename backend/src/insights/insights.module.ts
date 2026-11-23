@@ -350,6 +350,64 @@ class ReportsController {
   @Get("stock-movements") @Roles("OWNER", "MANAGER") movements(@Me() u, @Query("limit") limitText?: string) {
     return this.db.stockMovement.findMany({ where: { businessId: u.businessId }, include: { product: true }, orderBy: { createdAt: "desc" }, take: Math.min(500, Math.max(1, Number(limitText) || 100)) });
   }
+
+  /// End-of-day Z-report: cash-drawer reconciliation for a single business day.
+  @Get("z-report") @Roles("OWNER", "MANAGER", "CASHIER") async zReport(@Me() u, @Query("date") dateText?: string) {
+    const day = dateText ? new Date(`${dateText}T00:00:00`) : new Date();
+    if (Number.isNaN(day.getTime())) throw new BadRequestException("Invalid date");
+    const start = new Date(day); start.setHours(0, 0, 0, 0);
+    const end = new Date(start); end.setDate(end.getDate() + 1);
+    const saleWhere = { businessId: u.businessId, ...(u.role === "CASHIER" ? { userId: u.sub } : {}), saleDate: { gte: start, lt: end }, status: { notIn: ["void", "refunded"] } };
+    const [sales, payments, returns, topItems] = await Promise.all([
+      this.db.sale.aggregate({ where: saleWhere, _sum: { subtotal: true, discount: true, total: true, amountPaid: true, balanceDue: true }, _count: true }),
+      this.db.payment.groupBy({ by: ["method"], where: { businessId: u.businessId, status: "PAID", OR: [{ settledAt: { gte: start, lt: end } }, { settledAt: null, createdAt: { gte: start, lt: end } }] }, ...(u.role === "CASHIER" ? { where: { sale: { userId: u.sub } } } : {}), _sum: { amount: true } }),
+      this.db.returnRecord.aggregate({ where: { businessId: u.businessId, ...(u.role === "CASHIER" ? { userId: u.sub } : {}), createdAt: { gte: start, lt: end } }, _sum: { refundAmount: true }, _count: true }),
+      this.db.saleItem.groupBy({ by: ["productId"], where: { businessId: u.businessId, sale: saleWhere }, _sum: { stockQuantity: true, lineTotal: true }, orderBy: { _sum: { stockQuantity: "desc" } }, take: 5 }),
+    ]);
+    const productIds = topItems.map((t) => t.productId);
+    const products = productIds.length ? await this.db.product.findMany({ where: { id: { in: productIds } }, select: { id: true, name: true } }) : [];
+    const nameOf = (id: string) => products.find((p) => p.id === id)?.name ?? "Product";
+    return {
+      date: start.toISOString().slice(0, 10),
+      generatedAt: new Date().toISOString(),
+      sales: { count: sales._count, subtotal: Number(sales._sum.subtotal ?? 0), discount: Number(sales._sum.discount ?? 0), total: Number(sales._sum.total ?? 0), amountPaid: Number(sales._sum.amountPaid ?? 0), balanceDue: Number(sales._sum.balanceDue ?? 0) },
+      payments: payments.map((p) => ({ method: p.method, amount: Number(p._sum.amount ?? 0) })),
+      cashTotal: Number(payments.find((p) => p.method === "CASH")?._sum.amount ?? 0),
+      returns: { count: returns._count, refunded: Number(returns._sum.refundAmount ?? 0) },
+      topItems: topItems.map((t) => ({ name: nameOf(t.productId), quantitySold: Number(t._sum.stockQuantity ?? 0), revenue: Number(t._sum.lineTotal ?? 0) })),
+    };
+  }
+}
+
+@Controller("search") @UseGuards(AuthGuard)
+class GlobalSearchController {
+  constructor(private db: PrismaService) {}
+
+  /// Global search across products, customers and sales in one request.
+  @Get() @Roles("OWNER", "MANAGER", "CASHIER", "STOREKEEPER") async search(@Me() u, @Query("q") query?: string) {
+    const q = (query ?? "").trim();
+    if (q.length < 2) return { products: [], customers: [], sales: [] };
+    const [products, customers, sales] = await Promise.all([
+      this.db.product.findMany({
+        where: { businessId: u.businessId, deletedAt: null, active: true, OR: [{ name: { contains: q, mode: "insensitive" } }, { sku: { contains: q, mode: "insensitive" } }, { barcode: { contains: q } }] },
+        select: { id: true, name: true, sku: true, sellingPrice: true, imageUrl: true }, take: 5,
+      }),
+      this.db.customer.findMany({
+        where: { businessId: u.businessId, deletedAt: null, OR: [{ name: { contains: q, mode: "insensitive" } }, { phone: { contains: q } }] },
+        select: { id: true, name: true, phone: true, balance: true, loyaltyPoints: true }, take: 5,
+      }),
+      this.db.sale.findMany({
+        where: { businessId: u.businessId, saleNumber: { contains: q, mode: "insensitive" } },
+        select: { id: true, saleNumber: true, saleDate: true, total: true, status: true, customer: { select: { name: true } } },
+        orderBy: { saleDate: "desc" }, take: 5,
+      }),
+    ]);
+    return {
+      products: products.map((p) => ({ ...p, sellingPrice: Number(p.sellingPrice) })),
+      customers: customers.map((c) => ({ ...c, balance: Number(c.balance) })),
+      sales,
+    };
+  }
 }
 class DashboardPreferenceDto {
   @IsArray() @ArrayMaxSize(12) @IsString({ each: true }) layout: string[];
@@ -448,5 +506,5 @@ class DashboardBoardController {
   }
 }
 
-@Module({ controllers: [AlertsController, ReportsController, DashboardBoardController], providers: [AuthGuard] })
+@Module({ controllers: [AlertsController, ReportsController, DashboardBoardController, GlobalSearchController], providers: [AuthGuard] })
 export class InsightsModule {}

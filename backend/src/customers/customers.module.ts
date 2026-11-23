@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Controller, Get, Post, Patch, Delete, Param, ParseUUIDPipe, Query, Body, Headers, UseGuards, Module, NotFoundException } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { Type } from "class-transformer";
-import { IsIn, IsNumber, IsOptional, IsString, IsUUID, Min, MinLength, MaxLength, Matches } from "class-validator";
+import { IsIn, IsNumber, IsOptional, IsString, IsUUID, Min, MinLength, MaxLength, Matches, IsInt } from "class-validator";
 import { PrismaService } from "../prisma.service";
 import { AuthGuard, Me, Roles } from "../common/auth";
 import { enqueuePushEvent } from "../notifications/push_outbox";
@@ -13,6 +13,10 @@ class CustomerDto {
   @IsOptional() @IsString() @Matches(KENYAN_MOBILE_PATTERN, { message: "Enter a valid Kenyan mobile number" }) phone?: string;
   @IsOptional() @IsString() @MaxLength(1000) notes?: string;
   @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) creditLimit?: number;
+}
+class LoyaltyAdjustDto {
+  @Type(() => Number) @IsInt() points: number;
+  @IsOptional() @IsString() @MaxLength(200) reason?: string;
 }
 class PaymentDto {
   @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) amount: number;
@@ -29,6 +33,37 @@ class CustomersController {
       where: { businessId: u.businessId, deletedAt: null, ...(search ? { OR: [{ name: { contains: search, mode: "insensitive" } }, { phone: { contains: search } }] } : {}) },
       orderBy: { name: "asc" }, take: 200,
     });
+  }
+  @Post(":id/loyalty") @Roles("OWNER", "MANAGER", "CASHIER") async adjustLoyalty(@Me() u, @Param("id", ParseUUIDPipe) id: string, @Body() d: LoyaltyAdjustDto, @Headers("idempotency-key") key?: string) {
+    if (key && (key.length > 128 || !/^[\w.-]+$/.test(key))) throw new BadRequestException("Invalid Idempotency-Key");
+    return this.db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${id + ":customer"}))`;
+      if (key) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${u.businessId + ":loyalty-idempotency:" + key}))`;
+        const prior = await tx.loyaltyAdjustment.findFirst({ where: { businessId: u.businessId, idempotencyKey: key } });
+        if (prior) return prior;
+      }
+      const c = await tx.customer.findFirst({ where: { id, businessId: u.businessId, deletedAt: null } });
+      if (!c) throw new NotFoundException("Customer not found");
+      if (d.points < 0 && Number(c.loyaltyPoints) + d.points < 0)
+        throw new BadRequestException("A customer cannot have negative loyalty points");
+      const adjustment = await tx.loyaltyAdjustment.create({ data: {
+        businessId: u.businessId, customerId: id, userId: u.sub, points: d.points,
+        reason: d.reason?.trim(), idempotencyKey: key,
+      } });
+      const customer = await tx.customer.update({ where: { id }, data: { loyaltyPoints: { increment: d.points } } });
+      await tx.auditLog.create({ data: { businessId: u.businessId, userId: u.sub, action: "customer.loyalty.adjusted", entity: "customer", entityId: id, meta: { points: d.points, reason: d.reason ?? null, balance: Number(customer.loyaltyPoints) } } });
+      return { id: adjustment.id, customerId: id, points: Number(customer.loyaltyPoints), change: d.points };
+    });
+  }
+  @Get(":id/loyalty") @Roles("OWNER", "MANAGER", "CASHIER") async loyaltyHistory(@Me() u, @Param("id", ParseUUIDPipe) id: string) {
+    const c = await this.db.customer.findFirst({ where: { id, businessId: u.businessId, deletedAt: null }, select: { loyaltyPoints: true } });
+    if (!c) throw new NotFoundException("Customer not found");
+    const history = await this.db.loyaltyAdjustment.findMany({
+      where: { businessId: u.businessId, customerId: id },
+      orderBy: { createdAt: "desc" }, take: 50,
+    });
+    return { points: Number(c.loyaltyPoints), history: history.map((h) => ({ id: h.id, points: h.points, reason: h.reason, createdAt: h.createdAt })) };
   }
   @Get(":id") @Roles("OWNER", "MANAGER", "CASHIER") async get(@Me() u, @Param("id", ParseUUIDPipe) id: string) {
     const c = await this.db.customer.findFirst({ where: { id, businessId: u.businessId, deletedAt: null }, include: { sales: { where: { balanceDue: { gt: 0 } }, orderBy: { saleDate: "asc" }, take: 100 }, payments: { orderBy: { createdAt: "desc" }, take: 50 } } });

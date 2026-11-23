@@ -276,6 +276,14 @@ class SalesController {
           where: { id: d.customerId },
           data: { balance: { increment: sale.balanceDue } },
         });
+      // Loyalty: 1 point for every KES 100 paid in full (not on credit).
+      if (customer && confirmedPaidCents > 0 && dueAmount === 0) {
+        const earned = Math.floor(confirmedPaidCents / 10000);
+        if (earned > 0) {
+          await tx.customer.update({ where: { id: customer.id }, data: { loyaltyPoints: { increment: earned } } });
+          await tx.loyaltyAdjustment.create({ data: { businessId: u.businessId, customerId: customer.id, userId: u.sub, points: earned, reason: `Sale ${sale.saleNumber}` } });
+        }
+      }
       if (sale.balanceDue.gt(0) && customer) {
         const oldBalance = Number(customer.balance);
         const newBalance = oldBalance + Number(sale.balanceDue);
