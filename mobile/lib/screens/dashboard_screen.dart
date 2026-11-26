@@ -144,20 +144,26 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                     children: [
                       Text(
                         '$greeting${name.isEmpty ? '' : ', $name'}',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.titleMedium?.copyWith(color: C.muted),
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
+                              color: mutedOn(context),
+                              fontWeight: FontWeight.w600,
+                            ),
                       ),
                       Text(
                         board['businessName']?.toString() ?? 'Your shop',
                         style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(fontWeight: FontWeight.w800),
+                            ?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -.5,
+                              color: inkOn(context),
+                            ),
                       ),
                       Text(
                         _dateLabel(now),
-                        style: Theme.of(
-                          context,
-                        ).textTheme.bodySmall?.copyWith(color: C.muted),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: mutedOn(context),
+                        ),
                       ),
                     ],
                   ),
@@ -253,7 +259,19 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final debt = numberValue(d['outstandingCustomerDebt']);
     final debtors = numberValue(d['indebtedCustomers']).toInt();
     final alerts = numberValue(d['unreadAlerts']).toInt();
-    return Card(
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardTheme.color,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: C.border),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0D1B2A41),
+            blurRadius: 18,
+            offset: Offset(0, 7),
+          ),
+        ],
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -310,18 +328,69 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     children: [
       _section('Quick actions'),
       const SizedBox(height: 10),
-      Wrap(
-        spacing: 9,
-        runSpacing: 9,
-        children: [
-          for (final id in ids)
-            if (_actions[id] case final action?)
-              ActionChip(
-                avatar: Icon(action.$2, size: 18, color: C.emerald),
-                label: Text(action.$1),
-                onPressed: () => context.go(action.$3),
-              ),
-        ],
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final actionIds = [
+            for (final id in ids)
+              if (_actions.containsKey(id)) id,
+          ];
+          final columns = constraints.maxWidth >= 700
+              ? 4
+              : constraints.maxWidth >= 420
+              ? 3
+              : 2;
+          return GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: columns,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+              mainAxisExtent: 82,
+            ),
+            itemCount: actionIds.length,
+            itemBuilder: (context, index) {
+              final action = _actions[actionIds[index]]!;
+              return Material(
+                color: Theme.of(context).cardTheme.color,
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () => context.go(action.$3),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: C.border),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: C.emerald.withValues(alpha: .10),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(action.$2, color: C.emerald, size: 20),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            action.$1,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
       ),
       if (ids.any((id) => products.any((p) => p['id'] == id))) ...[
         const SizedBox(height: 8),
@@ -456,11 +525,23 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final change = d['changePercent'] == null
         ? null
         : numberValue(d['changePercent']).toDouble();
+    final saleCount = d['saleCount'] ?? 0;
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [C.forest, C.emerald]),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF174B82), Color(0xFF2F73B9), Color(0xFF568ED0)],
+        ),
         borderRadius: BorderRadius.circular(22),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x33286EB2),
+            blurRadius: 22,
+            offset: Offset(0, 9),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -475,14 +556,15 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             style: const TextStyle(
               color: Colors.white,
               fontWeight: FontWeight.w800,
-              fontSize: 28,
+              fontSize: 30,
+              letterSpacing: -.8,
             ),
           ),
           const SizedBox(height: 8),
           Row(
             children: [
               Text(
-                '${d['saleCount'] ?? 0} sales',
+                '$saleCount sales',
                 style: const TextStyle(color: Colors.white70),
               ),
               const Spacer(),

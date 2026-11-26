@@ -168,7 +168,8 @@ class ProductCard extends StatelessWidget {
                   children: [
                     Text(
                       name,
-                      maxLines: 2,
+                      maxLines: 1,
+                      softWrap: false,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontWeight: FontWeight.w800,
@@ -317,6 +318,7 @@ class _ActionBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 700;
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
       child: Row(
@@ -325,13 +327,19 @@ class _ActionBar extends StatelessWidget {
             Expanded(
               child: OutlinedButton.icon(
                 onPressed: onSell,
-                icon: const Icon(Icons.point_of_sale_outlined, size: 18),
+                icon: Icon(
+                  Icons.point_of_sale_outlined,
+                  size: compact ? 16 : 18,
+                ),
                 label: const Text(
                   'Sell',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+                  maxLines: 1,
+                  softWrap: false,
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
                 ),
                 style: OutlinedButton.styleFrom(
                   minimumSize: const Size.fromHeight(40),
+                  padding: EdgeInsets.symmetric(horizontal: compact ? 4 : 12),
                   side: BorderSide(color: C.border),
                   foregroundColor: C.emerald,
                   shape: RoundedRectangleBorder(

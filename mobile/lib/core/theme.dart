@@ -3,14 +3,14 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 
 class C {
-  static const emerald = Color(0xFF0B7A4B),
-      forest = Color(0xFF065F3A),
+  static const emerald = Color(0xFF2868B2),
+      forest = Color(0xFF174B82),
       amber = Color(0xFFF5A524),
-      coral = Color(0xFFFF6B35),
-      bg = Color(0xFFF7F8F7),
-      ink = Color(0xFF10221A),
-      muted = Color(0xFF5F6B65),
-      border = Color(0xFFE3E7E4),
+      coral = Color(0xFFFF7043),
+      bg = Color(0xFFF4F7FB),
+      ink = Color(0xFF172033),
+      muted = Color(0xFF69758A),
+      border = Color(0xFFE1E7F0),
       ok = Color(0xFF16A34A),
       warn = Color(0xFFF59E0B),
       danger = Color(0xFFDC2626);
@@ -22,9 +22,13 @@ String kes(num v) => 'KES ${NumberFormat('#,##0.00').format(v)}';
 /// surfaces, C.muted is too dim for dark backgrounds. Use these helpers in
 /// place of the raw constants so labels stay visible in both modes.
 Color inkOn(BuildContext context) =>
-    Theme.of(context).brightness == Brightness.dark ? const Color(0xFFE7EFEA) : C.ink;
+    Theme.of(context).brightness == Brightness.dark
+    ? const Color(0xFFE7EFEA)
+    : C.ink;
 Color mutedOn(BuildContext context) =>
-    Theme.of(context).brightness == Brightness.dark ? const Color(0xFF9FB0A8) : C.muted;
+    Theme.of(context).brightness == Brightness.dark
+    ? const Color(0xFF9FB0A8)
+    : C.muted;
 String businessDate(DateTime value) =>
     DateFormat('d MMM yyyy, HH:mm').format(value.toLocal());
 String formatBusinessDate(Object? value) {
@@ -56,12 +60,23 @@ ThemeData stockPesaTheme({bool dark = false}) => ThemeData(
   inputDecorationTheme: InputDecorationTheme(
     labelStyle: TextStyle(color: dark ? const Color(0xFFB9C6BF) : C.muted),
     hintStyle: TextStyle(color: dark ? const Color(0xFF8FA098) : C.muted),
-    floatingLabelStyle: TextStyle(color: dark ? const Color(0xFFB9C6BF) : C.muted),
+    floatingLabelStyle: TextStyle(
+      color: dark ? const Color(0xFFB9C6BF) : C.muted,
+    ),
     filled: true,
     fillColor: dark ? const Color(0xFF1B2A23) : Colors.white,
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: C.border)),
-    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: C.border)),
-    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: C.emerald, width: 1.6)),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: BorderSide(color: C.border),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: BorderSide(color: C.border),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: C.emerald, width: 1.6),
+    ),
   ),
   dropdownMenuTheme: DropdownMenuThemeData(
     textStyle: TextStyle(color: dark ? const Color(0xFFE7EFEA) : C.ink),
@@ -73,14 +88,20 @@ ThemeData stockPesaTheme({bool dark = false}) => ThemeData(
       fontSize: 18,
       fontWeight: FontWeight.w800,
     ),
-    contentTextStyle: TextStyle(color: dark ? const Color(0xFFE7EFEA) : C.ink, fontSize: 14),
+    contentTextStyle: TextStyle(
+      color: dark ? const Color(0xFFE7EFEA) : C.ink,
+      fontSize: 14,
+    ),
   ),
   bottomSheetTheme: const BottomSheetThemeData(backgroundColor: null),
   cardTheme: CardThemeData(
     color: dark ? const Color(0xFF14211B) : Colors.white,
-    elevation: 1,
+    elevation: 0,
     shadowColor: Colors.black12,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(18),
+      side: BorderSide(color: dark ? const Color(0xFF26382F) : C.border),
+    ),
   ),
   filledButtonTheme: FilledButtonThemeData(
     style: FilledButton.styleFrom(
@@ -100,5 +121,23 @@ ThemeData stockPesaTheme({bool dark = false}) => ThemeData(
     closeIconColor: Colors.white70,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     elevation: 8,
+  ),
+  appBarTheme: AppBarTheme(
+    elevation: 0,
+    scrolledUnderElevation: 0,
+    centerTitle: false,
+    backgroundColor: dark ? const Color(0xFF0D1712) : Colors.white,
+    foregroundColor: dark ? const Color(0xFFE7EFEA) : C.ink,
+    surfaceTintColor: Colors.transparent,
+    shape: Border(
+      bottom: BorderSide(color: dark ? const Color(0xFF26382F) : C.border),
+    ),
+  ),
+  navigationBarTheme: NavigationBarThemeData(
+    height: 72,
+    elevation: 0,
+    backgroundColor: dark ? const Color(0xFF14211B) : Colors.white,
+    indicatorColor: dark ? const Color(0xFF2B4E72) : const Color(0xFFE8F0FA),
+    surfaceTintColor: Colors.transparent,
   ),
 );
