@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'storage/cart_store.dart';
+import 'storage/offline_store.dart';
 
 const _configuredApi = String.fromEnvironment('API');
 String get apiBase {
@@ -88,7 +89,13 @@ Future<bool> hasSavedSession() async =>
 
 Future<Map<String, dynamic>> currentUser() async {
   final response = await dio.get('/auth/me');
-  return Map<String, dynamic>.from(response.data as Map);
+  final user = Map<String, dynamic>.from(response.data as Map);
+  try {
+    await OfflineStore().saveIdentity(user);
+  } catch (error) {
+    debugPrint('Could not save offline account identity: $error');
+  }
+  return user;
 }
 
 String apiError(Object error) {
@@ -147,6 +154,7 @@ Future<void> logout() async {
   await _store.delete(key: 'access');
   await _store.delete(key: 'refresh');
   await CartStore().clearAll();
+  await OfflineStore().clearSnapshotsAndIdentity();
 }
 
 Future<bool> hasCompletedOnboarding() async =>

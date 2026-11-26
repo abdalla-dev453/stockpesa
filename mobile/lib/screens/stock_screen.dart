@@ -1,23 +1,30 @@
 import 'package:flutter/material.dart';
 import 'dart:math';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/api.dart';
+import '../core/network/connectivity_provider.dart';
 import '../core/theme.dart';
 import '../core/widgets/app_states.dart';
+import '../core/storage/offline_store.dart';
+import '../features/stock/data/offline_stock_sync.dart';
 
-class StockScreen extends StatefulWidget {
+class StockScreen extends ConsumerStatefulWidget {
   const StockScreen({super.key, this.initialAction});
   final String? initialAction;
   @override
-  State<StockScreen> createState() => _StockScreenState();
+  ConsumerState<StockScreen> createState() => _StockScreenState();
 }
 
-class _StockScreenState extends State<StockScreen>
+class _StockScreenState extends ConsumerState<StockScreen>
     with SingleTickerProviderStateMixin {
   late final tabs = TabController(length: 2, vsync: this);
   List products = [], movements = [];
   bool loading = true;
   String? loadError;
+  bool showingCache = false;
+  List<Map<String, dynamic>> queuedOperations = [];
   @override
   void initState() {
     super.initState();
@@ -87,11 +94,93 @@ class _StockScreenState extends State<StockScreen>
       ]);
       products = r[0].data as List;
       movements = r[1].data as List;
+      try {
+        await currentUser();
+      } catch (error) {
+        if (mounted) _msg('Could not refresh account identity: ${apiError(error)}');
+      }
+      await _saveStockSnapshot();
+      showingCache = false;
       loadError = null;
     } catch (e) {
-      loadError = apiError(e);
+      final cached = await OfflineStore().loadSnapshot('stock');
+      if (cached == null) {
+        loadError = apiError(e);
+      } else {
+        final snapshot = Map<String, dynamic>.from(cached['data'] as Map);
+        products = snapshot['products'] as List? ?? [];
+        movements = snapshot['movements'] as List? ?? [];
+        showingCache = true;
+        loadError = null;
+      }
     }
+    queuedOperations = await OfflineStore().loadStockQueueForCurrentUser();
     if (mounted) setState(() => loading = false);
+  }
+
+  Future<void> _saveStockSnapshot() async {
+    try {
+      await OfflineStore().saveSnapshot('stock', {
+        'products': products,
+        'movements': movements,
+      });
+    } catch (error) {
+      if (mounted) {
+        _msg('Could not save stock for offline use: ${apiError(error)}');
+      }
+    }
+  }
+
+  Future<bool> _queueStockChange({
+    required String id,
+    required String kind,
+    required Map<String, dynamic> payload,
+    required Map<String, dynamic> product,
+    required double quantityChangeInStockUnit,
+  }) async {
+    try {
+      final identity = await OfflineStore().loadIdentity();
+      if (identity == null ||
+          identity['id'] == null ||
+          identity['businessId'] == null) {
+        _msg(
+          'Reconnect once to securely prepare this device for offline stock updates.',
+        );
+        return false;
+      }
+      await OfflineStore().enqueueStockOperation({
+        'id': id,
+        'kind': kind,
+        'payload': payload,
+        'userId': identity['id'],
+        'businessId': identity['businessId'],
+        'status': 'pending',
+        'createdAt': DateTime.now().toIso8601String(),
+      });
+      final index = products.indexWhere(
+        (row) => row['id']?.toString() == product['id']?.toString(),
+      );
+      if (index >= 0) {
+        final updated = Map<String, dynamic>.from(products[index] as Map);
+        updated['quantity'] =
+            numberValue(updated['quantity']) + quantityChangeInStockUnit;
+        products[index] = updated;
+        await _saveStockSnapshot();
+      }
+      if (mounted) {
+        setState(() => queuedOperations = [...queuedOperations, {
+          'id': id,
+          'kind': kind,
+          'payload': payload,
+          'status': 'pending',
+        }]);
+        _msg('Saved on this device. It will sync when the connection returns.');
+      }
+      return true;
+    } catch (error) {
+      if (mounted) _msg('Could not save the stock update offline: ${apiError(error)}');
+      return false;
+    }
   }
 
   void _msg(String s) =>
@@ -102,14 +191,24 @@ class _StockScreenState extends State<StockScreen>
   }) async {
     final baseUnit = (p['unit'] ?? 'piece').toString();
     final intakeUnits = <String>{baseUnit};
+    final intakeFactors = <String, double>{baseUnit: 1};
     if (intake) {
       try {
         final response = await dio.get('/unit-conversions', queryParameters: {'productId': p['id']});
         for (final value in response.data as List) {
           final row = value as Map;
           if (row['productId'] == null || row['productId']?.toString() == p['id'].toString()) {
-            if (row['toUnit'] == baseUnit) intakeUnits.add(row['fromUnit'].toString());
-            if (row['fromUnit'] == baseUnit) intakeUnits.add(row['toUnit'].toString());
+            final multiplier = numberValue(row['multiplier']).toDouble();
+            if (row['toUnit'] == baseUnit && multiplier > 0) {
+              final unit = row['fromUnit'].toString();
+              intakeUnits.add(unit);
+              intakeFactors[unit] = multiplier;
+            }
+            if (row['fromUnit'] == baseUnit && multiplier > 0) {
+              final unit = row['toUnit'].toString();
+              intakeUnits.add(unit);
+              intakeFactors[unit] = 1 / multiplier;
+            }
           }
         }
       } catch (_) {}
@@ -205,54 +304,102 @@ class _StockScreenState extends State<StockScreen>
               final amount = double.tryParse(qty.text),
                   unitCost = double.tryParse(cost.text);
               if (amount == null ||
-                  amount == 0 ||
-                  (intake && (unitCost == null || unitCost < 0))) {
+                  (intake ? amount <= 0 : amount == 0) ||
+                  amount * 1000 != (amount * 1000).roundToDouble() ||
+                  (intake &&
+                      (unitCost == null ||
+                          unitCost < 0 ||
+                          unitCost * 100 !=
+                              (unitCost * 100).roundToDouble()))) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content: Text('Enter a valid quantity and cost'),
+                    content: Text(
+                      'Enter a valid quantity (up to 3 decimals) and cost (up to 2 decimals).',
+                    ),
                   ),
                 );
                 return;
               }
               try {
                 if (intake) {
+                  final payload = <String, dynamic>{
+                    'productId': p['id'],
+                    'quantity': amount,
+                    'unitCost': unitCost,
+                    'unit': selectedUnit,
+                    'supplier': supplier.text.trim().isEmpty
+                        ? null
+                        : supplier.text.trim(),
+                    'reference': reference.text.trim().isEmpty
+                        ? null
+                        : reference.text.trim(),
+                    'notes': notes.text.trim().isEmpty
+                        ? null
+                        : notes.text.trim(),
+                  };
                   await dio.post(
                     '/stock/intake',
-                    data: {
-                      'productId': p['id'],
-                      'quantity': amount,
-                      'unitCost': unitCost,
-                      'unit': selectedUnit,
-                      'supplier': supplier.text.trim().isEmpty
-                          ? null
-                          : supplier.text.trim(),
-                      'reference': reference.text.trim().isEmpty
-                          ? null
-                          : reference.text.trim(),
-                      'notes': notes.text.trim().isEmpty
-                          ? null
-                          : notes.text.trim(),
-                    },
+                    data: payload,
                     options: Options(headers: {'Idempotency-Key': requestKey}),
                   );
                 } else {
+                  final payload = <String, dynamic>{
+                    'productId': p['id'],
+                    'quantityChange': amount,
+                    'reason': reason.text.trim().isEmpty
+                        ? 'OTHER'
+                        : reason.text.trim(),
+                    'notes': notes.text.trim().isEmpty
+                        ? null
+                        : notes.text.trim(),
+                  };
                   await dio.post(
                     '/stock/adjustments',
-                    data: {
-                      'productId': p['id'],
-                      'quantityChange': amount,
-                      'reason': reason.text.trim().isEmpty
-                          ? 'OTHER'
-                          : reason.text.trim(),
-                      'notes': notes.text.trim().isEmpty
-                          ? null
-                          : notes.text.trim(),
-                    },
+                    data: payload,
                     options: Options(headers: {'Idempotency-Key': requestKey}),
                   );
                 }
                 if (context.mounted) Navigator.pop(context, true);
               } catch (e) {
+                if (e is DioException && e.response == null) {
+                  final queued = await _queueStockChange(
+                    id: requestKey,
+                    kind: intake ? 'intake' : 'adjustment',
+                    payload: {
+                      'productId': p['id'],
+                      if (intake) ...{
+                        'quantity': amount,
+                        'unitCost': unitCost,
+                        'unit': selectedUnit,
+                        'supplier': supplier.text.trim().isEmpty
+                            ? null
+                            : supplier.text.trim(),
+                        'reference': reference.text.trim().isEmpty
+                            ? null
+                            : reference.text.trim(),
+                        'notes': notes.text.trim().isEmpty
+                            ? null
+                            : notes.text.trim(),
+                      } else ...{
+                        'quantityChange': amount,
+                        'reason': reason.text.trim().isEmpty
+                            ? 'OTHER'
+                            : reason.text.trim(),
+                        'notes': notes.text.trim().isEmpty
+                            ? null
+                            : notes.text.trim(),
+                      },
+                    },
+                    product: p,
+                    quantityChangeInStockUnit: intake
+                        ? amount * (intakeFactors[selectedUnit] ?? 1)
+                        : amount,
+                  );
+                  if (queued && context.mounted) {
+                    Navigator.pop(context, true);
+                  }
+                  return;
+                }
                 if (context.mounted) {
                   ScaffoldMessenger.of(
                     context,
@@ -274,6 +421,8 @@ class _StockScreenState extends State<StockScreen>
   @override
   Widget build(BuildContext context) => Column(
     children: [
+      if (showingCache || queuedOperations.isNotEmpty)
+        _offlineNotice(context),
       Material(
         color: Colors.white,
         child: TabBar(
@@ -369,4 +518,68 @@ class _StockScreenState extends State<StockScreen>
       ),
     ],
   );
+
+  Widget _offlineNotice(BuildContext context) {
+    final failed = queuedOperations
+        .where((item) => item['status'] == 'failed')
+        .length;
+    final pending = queuedOperations.length;
+    final failedOperation = failed == 0
+        ? null
+        : queuedOperations.firstWhere((item) => item['status'] == 'failed');
+    final status = showingCache
+        ? 'Showing saved stock data; it may be out of date.'
+        : [
+            '$pending stock change${pending == 1 ? '' : 's'} waiting to sync',
+            if (failed > 0)
+              '· $failed need review: ${failedOperation?['lastError'] ?? 'retry required'}',
+          ].join(' ');
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF0CC),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off_outlined, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              status,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+          ),
+          if (pending > 0)
+            IconButton(
+              tooltip: failed > 0 ? 'Retry failed changes' : 'Sync stock changes',
+              visualDensity: VisualDensity.compact,
+              onPressed: () async {
+                final connected = ref
+                    .read(connectivityProvider)
+                    .maybeWhen(
+                      data: (results) => results.any(
+                        (item) => item != ConnectivityResult.none,
+                      ),
+                      orElse: () => false,
+                    );
+                if (!connected) {
+                  _msg('Reconnect before retrying stock changes.');
+                  return;
+                }
+                if (failed > 0) {
+                  await ref.read(offlineStockSyncProvider).retryFailed();
+                } else {
+                  await ref.read(offlineStockSyncProvider).syncPending();
+                }
+                await load();
+              },
+              icon: const Icon(Icons.sync_rounded, size: 19),
+            ),
+        ],
+      ),
+    );
+  }
 }

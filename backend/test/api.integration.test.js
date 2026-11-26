@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createHmac } = require('node:crypto');
+const { createHmac, randomUUID } = require('node:crypto');
 
 const databaseUrl = process.env.DATABASE_URL_TEST;
 
@@ -86,6 +86,22 @@ test('API integration: tenant boundary, stock idempotency, sale, and M-Pesa flow
     });
     assert.equal(productA.status, 201);
     assert.equal(productB.status, 201);
+
+    const countClientId = randomUUID();
+    const countBody = { clientId: countClientId, notes: 'Offline stock count' };
+    const countFirst = await call('/stock-counts', {
+      method: 'POST', token: ownerA, body: countBody,
+    });
+    const countRetry = await call('/stock-counts', {
+      method: 'POST', token: ownerA, body: countBody,
+    });
+    assert.equal(countFirst.status, 201);
+    assert.equal(countRetry.status, 201);
+    assert.equal(countRetry.data.id, countClientId);
+    assert.equal((await call('/stock-counts', {
+      method: 'POST', token: ownerA,
+      body: { clientId: countClientId, notes: 'Different count' },
+    })).status, 409);
 
     const csv = 'name,selling_price,unit\nCSV No SKU,12.50,piece\n';
     const importFirst = await confirmCsv(ownerA, csv);
