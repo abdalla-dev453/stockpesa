@@ -275,6 +275,46 @@ test('API integration: tenant boundary, stock idempotency, sale, and M-Pesa flow
     assert.equal(receiptAsCashier.status, 200);
     assert.equal(receiptAsCashier.data.cashierName, 'Integration Owner a');
     assert.equal((await call(`/sales/${sale.data.id}`, { token: ownerB })).status, 404);
+    const splitProduct = await call('/products', {
+      method: 'POST', token: ownerA,
+      body: { name: 'Split Payment Item', sku: 'SPLIT-PAYMENT', unit: 'piece', buyingPrice: 2, sellingPrice: 10 },
+    });
+    assert.equal(splitProduct.status, 201);
+    assert.equal((await call('/stock/intake', {
+      method: 'POST', token: ownerA, key: 'split-product-intake',
+      body: { productId: splitProduct.data.id, quantity: 2, unitCost: 2 },
+    })).status, 201);
+    const splitSaleBody = {
+      items: [{ productId: splitProduct.data.id, quantity: 1 }],
+      method: 'CASH',
+      amountPaid: 10,
+      tenders: [
+        { method: 'CASH', amount: 4 },
+        { method: 'MPESA', amount: 6, mpesaReceiptNumber: 'SPLIT123' },
+      ],
+    };
+    const splitSale = await call('/sales', {
+      method: 'POST', token: ownerA, key: 'split-sale-once', body: splitSaleBody,
+    });
+    assert.equal(splitSale.status, 201);
+    assert.deepEqual(splitSale.data.payments.map((payment) => payment.method), ['CASH', 'MPESA']);
+    assert.deepEqual(splitSale.data.payments.map((payment) => Number(payment.amount)), [4, 6]);
+    assert.equal(splitSale.data.payments[1].reference, 'SPLIT123');
+    const splitReceipt = await app.get(PrismaService).receipt.findUnique({
+      where: { saleId: splitSale.data.id },
+    });
+    assert.equal(splitReceipt.snapshot.method, 'SPLIT');
+    assert.equal(splitReceipt.snapshot.payments.length, 2);
+    const splitReplay = await call('/sales', {
+      method: 'POST', token: ownerA, key: 'split-sale-once', body: splitSaleBody,
+    });
+    assert.equal(splitReplay.status, 201);
+    assert.equal(splitReplay.data.id, splitSale.data.id);
+    assert.equal(splitReplay.data.payments.length, 2);
+    assert.equal((await call('/sales', {
+      method: 'POST', token: ownerA, key: 'split-mismatch',
+      body: { ...splitSaleBody, amountPaid: 9 },
+    })).status, 400);
     const oversell = await call('/sales', {
       method: 'POST', token: ownerA, key: 'oversell-failure',
       body: { items: [{ productId: productA.data.id, quantity: 99 }], method: 'CASH', amountPaid: 10 },

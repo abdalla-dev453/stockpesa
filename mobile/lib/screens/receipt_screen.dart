@@ -68,6 +68,10 @@ class _ReceiptPreviewScreenState extends State<ReceiptPreviewScreen> {
         final value = snapshot.data!;
         final sale = value.sale;
         final rows = value.items;
+        final paymentRows =
+            value.snapshot['payments'] as List? ??
+            sale['payments'] as List? ??
+            [];
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -141,11 +145,12 @@ class _ReceiptPreviewScreenState extends State<ReceiptPreviewScreen> {
                     _line('Paid', numberValue(sale['amountPaid'])),
                     _line('Balance due', numberValue(sale['balanceDue'])),
                     Text(
-                      'Payment method: ${value.snapshot['method'] ?? (sale['payments'] as List? ?? []).firstOrNull?['method'] ?? 'CREDIT'}',
+                      'Payment method: ${value.snapshot['method'] == 'SPLIT' ? 'Split payment' : value.snapshot['method'] ?? (sale['payments'] as List? ?? []).firstOrNull?['method'] ?? 'CREDIT'}',
                     ),
-                    for (final payment in sale['payments'] as List? ?? [])
-                      if ((payment as Map)['reference'] != null)
-                        Text('Payment reference: ${payment['reference']}'),
+                    for (final rawPayment in paymentRows)
+                      Text(
+                        '${(rawPayment as Map)['method']}: ${kes(numberValue(rawPayment['amount']))}${rawPayment['reference'] == null ? '' : ' · ${rawPayment['reference']}'}',
+                      ),
                     if (value.footer?.isNotEmpty == true) ...[
                       const SizedBox(height: 14),
                       Center(
