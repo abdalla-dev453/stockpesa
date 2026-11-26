@@ -101,7 +101,7 @@ The project follows a modular git workflow with specialized branches pushed to t
 - **Customer Credit & Debt Ledger:** Customer balances, per-customer credit limits, debt repayment tracking, and balance-bounded partial payments.
 - **Returns & Restocking:** Full and partial item returns with optional return-to-stock re-entry and atomic sale balance updates.
 - **Receipts & Reports:** Printable and shareable PDF receipts with tenant snapshots, daily sales summaries, stock movement reports, and CSV report export.
-- **Resilient Mobile UX:** Secure JWT persistence with auto-refresh, offline cart preservation, and strict no-offline-queue integrity guarantees.
+- **Resilient Mobile UX:** Secure JWT persistence and encrypted offline snapshots for product, stock, customer, report, and count data; stock changes and fully paid cash sales sync from account-scoped, ordered outboxes using idempotency keys.
 
 ---
 
@@ -256,7 +256,7 @@ Comprehensive guides, specifications, and collateral are located in `docs/` and 
 ### Current Scope & Known Limitations
 
 - **M-Pesa Integration:** Supports manual receipt recording and demo mock callbacks; live Daraja STK Push integration is slated for subsequent releases.
-- **Offline Mode:** Unsaved carts persist locally, but offline checkout queuing is intentionally disabled to avoid inventory divergence.
+- **Offline Mode:** Encrypted cached business data, stock changes, and fully paid cash sales can be queued and synced when connectivity returns. Non-cash checkout still requires a connection; queued sales rejected by the server stay on-device for review.
 - **Single Branch:** Designed for single-shop operations with unified stock and staff.
 
 ### V1.1 Roadmap

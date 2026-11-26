@@ -10,6 +10,8 @@ import '../core/notifications/push_notifications.dart';
 import '../core/theme.dart';
 import '../features/auth/presentation/auth_provider.dart';
 import '../features/insights/data/insights_repository.dart';
+import '../features/sales/data/offline_sales_sync.dart';
+import '../features/stock/data/offline_stock_sync.dart';
 import '../screens/more_screen.dart' as legacy;
 
 class StockPesaShell extends ConsumerStatefulWidget {
@@ -137,6 +139,19 @@ class _StockPesaShellState extends ConsumerState<StockPesaShell> {
           'New business alert',
           'You have $current unread alerts.',
         );
+      }
+    });
+    ref.listen(connectivityProvider, (_, next) {
+      final connected = next.asData?.value.any(
+        (item) => item != ConnectivityResult.none,
+      );
+      if (connected == true) {
+        unawaited(() async {
+          await Future.wait<void>([
+            ref.read(offlineStockSyncProvider).syncPending(),
+            ref.read(offlineSalesSyncProvider).syncPending(),
+          ]);
+        }());
       }
     });
     final width = MediaQuery.sizeOf(context).width;

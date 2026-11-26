@@ -30,6 +30,7 @@ import {
   MaxLength,
 } from "class-validator";
 import { Type } from "class-transformer";
+import type { Payment, PayMethod } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { PrismaService } from "../prisma.service";
 import { AuthGuard, Me, Roles } from "../common/auth";
@@ -44,13 +45,21 @@ class ItemDto {
   @IsNumber({ maxDecimalPlaces: 3 }) @Min(0.001) quantity: number;
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) discount?: number;
 }
+class TenderDto {
+  @IsIn(["CASH", "MPESA", "BANK", "CARD"]) method: PayMethod;
+  @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) amount: number;
+  @IsOptional() @IsString() @MaxLength(32) @Matches(/^[A-Za-z0-9]{6,32}$/) mpesaReceiptNumber?: string;
+  @IsOptional() @IsString() @MaxLength(64) reference?: string;
+}
 class SaleDto {
   @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => ItemDto) items: ItemDto[];
+  @IsOptional() @IsArray() @ArrayMinSize(2) @ValidateNested({ each: true }) @Type(() => TenderDto) tenders?: TenderDto[];
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) discount?: number;
-  @IsIn(["CASH", "MPESA", "BANK", "CARD", "CREDIT"]) method: string;
+  @IsIn(["CASH", "MPESA", "BANK", "CARD", "CREDIT"]) method: PayMethod;
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) amountPaid: number;
   @IsOptional() @IsUUID() customerId?: string;
   @IsOptional() @IsString() overrideReason?: string;
+  @IsOptional() @IsString() @MaxLength(64) paymentReference?: string;
   @IsOptional() @IsString() @MaxLength(32) @Matches(/^[A-Za-z0-9]{6,32}$/) mpesaReceiptNumber?: string;
 }
 class ReturnItemDto {
@@ -75,6 +84,25 @@ class SalesController {
     if (d.items.some((item) => (!!item.productId === !!item.variantId)))
       throw new BadRequestException("Choose exactly one product or product variant for each sale item");
     if (key && (key.length > 128 || !/^[\w.-]+$/.test(key))) throw new BadRequestException("Invalid Idempotency-Key");
+    if (d.tenders) {
+      if (d.method === "CREDIT" || d.mpesaReceiptNumber || d.paymentReference)
+        throw new BadRequestException("Use tender details for every split payment method and reference");
+      if (new Set(d.tenders.map((tender) => tender.method)).size !== d.tenders.length)
+        throw new BadRequestException("Choose a different payment method for each split tender");
+      const tenderTotal = d.tenders.reduce((sum, tender) => sum + cents(tender.amount), 0);
+      if (tenderTotal !== cents(d.amountPaid))
+        throw new BadRequestException("Split payment amounts must match the amount paid");
+      for (const tender of d.tenders) {
+        if (tender.method === "MPESA" && !tender.mpesaReceiptNumber)
+          throw new BadRequestException("Enter an M-Pesa confirmation code for each M-Pesa payment");
+        if (tender.method !== "MPESA" && tender.mpesaReceiptNumber)
+          throw new BadRequestException("An M-Pesa code can only be used with an M-Pesa payment");
+        if (["BANK", "CARD"].includes(tender.method) && !tender.reference?.trim())
+          throw new BadRequestException(`Enter a reference for the ${tender.method.toLowerCase()} payment`);
+        if (!["BANK", "CARD"].includes(tender.method) && tender.reference)
+          throw new BadRequestException("A reference can only be used with a bank or card payment");
+      }
+    }
     const payload = createHash("sha256").update(JSON.stringify(d)).digest("hex");
     return this.db.$transaction(async (tx) => {
       if (key) {
@@ -150,7 +178,9 @@ class SalesController {
       const total = money(totalCents);
       if (d.mpesaReceiptNumber && d.method !== "MPESA")
         throw new BadRequestException("An M-Pesa receipt number can only be used with M-Pesa");
-      const mpesaPlan = d.method === "MPESA" ? planMpesaCheckout({
+      if (d.paymentReference && !["BANK", "CARD"].includes(d.method))
+        throw new BadRequestException("A payment reference can only be used with bank or card payments");
+      const mpesaPlan = !d.tenders && d.method === "MPESA" ? planMpesaCheckout({
         receiptNumber: d.mpesaReceiptNumber,
         requestedPaidCents: cents(d.amountPaid),
         totalCents,
@@ -166,11 +196,19 @@ class SalesController {
         throw new BadRequestException("Mock M-Pesa checkout must request the full sale total");
       const manualMpesa = mpesaPlan?.manual ?? false;
       const mpesaPending = mpesaPlan?.pending ?? false;
+      if (d.tenders?.some((tender) => tender.method === "MPESA")) {
+        for (const tender of d.tenders.filter((item) => item.method === "MPESA")) {
+          if (cents(tender.amount) <= 0)
+            throw new BadRequestException("Enter the M-Pesa amount received");
+        }
+      }
       if (d.method === "CREDIT" && !d.customerId)
         throw new BadRequestException("Select a customer for credit sales");
       if (d.method === "CREDIT" && d.amountPaid > 0)
         throw new BadRequestException("Choose the actual payment method when collecting money at checkout");
-      const requestedPaidCents = cents(d.amountPaid);
+      const requestedPaidCents = d.tenders
+        ? d.tenders.reduce((sum, tender) => sum + cents(tender.amount), 0)
+        : cents(d.amountPaid);
       if (requestedPaidCents > totalCents)
         throw new BadRequestException("Amount paid cannot exceed the sale total");
       const confirmedPaidCents = mpesaPlan ? mpesaPlan.salePaidCents : requestedPaidCents;
@@ -187,8 +225,14 @@ class SalesController {
       const amountDue = Math.max(dueAmount, 0);
       if (customer?.creditLimit != null && cents(customer.balance) + cents(amountDue) > cents(customer.creditLimit))
         throw new BadRequestException("This sale would exceed the customer's credit limit");
-      if (manualMpesa) {
-        const receiptNumber = d.mpesaReceiptNumber!.toUpperCase();
+      const mpesaReceipts = d.tenders
+        ? d.tenders
+            .filter((tender) => tender.method === "MPESA")
+            .map((tender) => tender.mpesaReceiptNumber!.toUpperCase())
+        : manualMpesa ? [d.mpesaReceiptNumber!.toUpperCase()] : [];
+      if (new Set(mpesaReceipts).size !== mpesaReceipts.length)
+        throw new ConflictException("Each M-Pesa payment must use a different confirmation code");
+      for (const receiptNumber of mpesaReceipts.sort()) {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${u.businessId + ":mpesa-receipt:" + receiptNumber}))`;
         const duplicateReceipt = await tx.payment.findFirst({ where: {
           businessId: u.businessId,
@@ -258,19 +302,48 @@ class SalesController {
           overrideReason: d.overrideReason,
         });
       }
-      const payment = d.method === "CREDIT" ? null : await tx.payment.create({
+      const payments: Payment[] = [];
+      if (d.tenders) {
+        for (const tender of d.tenders) {
+          payments.push(await tx.payment.create({
+            data: {
+              businessId: u.businessId,
+              saleId: sale.id,
+              customerId: d.customerId,
+              method: tender.method,
+              amount: money(cents(tender.amount)),
+              status: "PAID",
+              settledAt: new Date(),
+              ...(tender.method === "MPESA"
+                ? { reference: tender.mpesaReceiptNumber!.toUpperCase() }
+                : tender.reference?.trim()
+                  ? { reference: tender.reference.trim() }
+                  : {}),
+            },
+          }));
+        }
+      } else if (d.method !== "CREDIT") {
+        payments.push(await tx.payment.create({
           data: {
             businessId: u.businessId,
             saleId: sale.id,
             customerId: d.customerId,
-            method: d.method as any,
+            method: d.method,
             amount: mpesaPending ? total : confirmedPaid,
             status: mpesaPending ? "PENDING" : "PAID",
             settledAt: mpesaPending ? undefined : new Date(),
             ...(d.method === "MPESA" && manualMpesa ? { reference: d.mpesaReceiptNumber!.toUpperCase() } : {}),
+            ...(["BANK", "CARD"].includes(d.method) && d.paymentReference?.trim()
+              ? { reference: d.paymentReference.trim() }
+              : {}),
             ...(mpesaPending ? { checkoutRequestId: `mock_${sale.id}` } : {}),
           },
-        });
+        }));
+      }
+      const paymentStatus = d.tenders
+        ? payments.every((payment) => payment.status === "PAID") ? "PAID" : "PENDING"
+        : payments[0]?.status ?? "CREDIT";
+      const displayMethod = d.tenders ? "SPLIT" : d.method;
       if (sale.balanceDue.gt(0) && d.customerId)
         await tx.customer.update({
           where: { id: d.customerId },
@@ -307,10 +380,10 @@ class SalesController {
       const businessSnapshot = await tx.business.findUnique({ where: { id: u.businessId }, select: { name: true, phone: true, receiptFooter: true, currency: true } });
       const receipt = await tx.receipt.create({ data: {
         businessId: u.businessId, saleId: sale.id, receiptNumber: sale.saleNumber,
-        snapshot: { businessName: businessSnapshot?.name, businessPhone: businessSnapshot?.phone, receiptFooter: businessSnapshot?.receiptFooter, currency: businessSnapshot?.currency, saleNumber: sale.saleNumber, saleDate: sale.saleDate.toISOString(), subtotal, discount: d.discount ?? 0, tax: 0, total, amountPaid: confirmedPaid, balanceDue: Number(sale.balanceDue), method: d.method, paymentStatus: payment?.status ?? "CREDIT", items: lines.map((l, index) => ({ saleItemId: sale.items[index]?.id, name: l.p.name, sku: l.p.sku, quantity: l.it.quantity, unit: l.enteredUnit, unitPrice: Number(l.p.sellingPrice), lineDiscount: l.it.discount ?? 0, lineTotal: l.line })) },
+        snapshot: { businessName: businessSnapshot?.name, businessPhone: businessSnapshot?.phone, receiptFooter: businessSnapshot?.receiptFooter, currency: businessSnapshot?.currency, saleNumber: sale.saleNumber, saleDate: sale.saleDate.toISOString(), subtotal, discount: d.discount ?? 0, tax: 0, total, amountPaid: confirmedPaid, balanceDue: Number(sale.balanceDue), method: displayMethod, paymentStatus, payments: payments.map((payment) => ({ method: payment.method, amount: Number(payment.amount), reference: payment.reference, status: payment.status })), items: lines.map((l, index) => ({ saleItemId: sale.items[index]?.id, name: l.p.name, sku: l.p.sku, quantity: l.it.quantity, unit: l.enteredUnit, unitPrice: Number(l.p.sellingPrice), lineDiscount: l.it.discount ?? 0, lineTotal: l.line })) },
       } });
-      await tx.auditLog.create({ data: { businessId: u.businessId, userId: u.sub, action: sale.status === "completed" ? "sale.completed" : "sale.created", entity: "sale", entityId: sale.id, meta: { saleNumber: sale.saleNumber, total, amountPaid: confirmedPaid, balanceDue: Number(sale.balanceDue), receiptId: receipt.id, paymentId: payment?.id ?? null, ...(manualMpesa ? { mpesaReceiptNumber: d.mpesaReceiptNumber!.toUpperCase() } : {}) } } });
-      return { ...sale, payments: payment ? [payment] : [] };
+      await tx.auditLog.create({ data: { businessId: u.businessId, userId: u.sub, action: sale.status === "completed" ? "sale.completed" : "sale.created", entity: "sale", entityId: sale.id, meta: { saleNumber: sale.saleNumber, total, amountPaid: confirmedPaid, balanceDue: Number(sale.balanceDue), receiptId: receipt.id, paymentIds: payments.map((payment) => payment.id), ...(manualMpesa ? { mpesaReceiptNumber: d.mpesaReceiptNumber!.toUpperCase() } : {}) } } });
+      return { ...sale, payments };
     });
   }
   @Get() @Roles("OWNER", "MANAGER", "CASHIER") list(@Me() u) {

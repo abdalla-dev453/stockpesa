@@ -13,7 +13,9 @@ import '../core/api.dart';
 import '../core/network/connectivity_provider.dart';
 import '../core/storage/cart_store.dart';
 import '../core/theme.dart';
+import '../core/storage/offline_store.dart';
 import '../features/sales/domain/sale_math.dart';
+import '../features/sales/data/offline_sales_sync.dart';
 import 'products_screen.dart' show BarcodeScanScreen;
 
 class SellScreen extends ConsumerStatefulWidget {
@@ -41,15 +43,20 @@ class _SellScreenState extends ConsumerState<SellScreen> {
   final _cashReceived = TextEditingController();
   final _mpesaAmount = TextEditingController();
   final _mpesaReceipt = TextEditingController();
+  final _paymentReference = TextEditingController();
   final Map<String, Map<String, dynamic>> _cart = {};
   List<Map<String, dynamic>> _products = [], _customers = [], _categories = [];
   List<Map<String, dynamic>> _parked = [];
   bool _loading = true, _saving = false, _hasCachedProducts = false;
+  bool _discountPercent = false;
   String? _loadError, _selectedCategory, _customerId, _overrideReason;
   String _method = 'CASH';
+  List<Map<String, dynamic>> _splitTenders = [];
   bool _manualMpesa = false;
   String? _checkoutKey, _checkoutFingerprint;
   String _role = '';
+  String _cashierName = '';
+  List<Map<String, dynamic>> _offlineSales = [];
   bool _initialProductHandled = false;
   late final Future<void> _restoreFuture;
 
@@ -68,7 +75,10 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         ),
       ) /
       100;
-  double get _discountValue => double.tryParse(_discount.text) ?? 0;
+  double get _discountInput => double.tryParse(_discount.text) ?? 0;
+  double get _discountValue => _discountPercent
+      ? double.parse((_subtotal * _discountInput / 100).toStringAsFixed(2))
+      : _discountInput;
   double get _total =>
       SaleMath.totalCents(
         SaleMath.subtotalCents(
@@ -80,8 +90,19 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       ) /
       100;
   double get _cashValue => double.tryParse(_cashReceived.text) ?? 0;
+  double get _splitPaid => _splitTenders.fold<double>(
+    0,
+    (sum, tender) =>
+        sum + (double.tryParse(tender['amount']?.toString() ?? '') ?? 0),
+  );
   double get _change => max(0, _cashValue - _total).toDouble();
   bool get _canOverride => _role == 'OWNER' || _role == 'MANAGER';
+
+  Map<String, dynamic> _newTender(String method) => {
+    'id': DateTime.now().microsecondsSinceEpoch.toString(),
+    'method': method,
+    'amount': '',
+  };
 
   @override
   void initState() {
@@ -99,6 +120,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
     _cashReceived.dispose();
     _mpesaAmount.dispose();
     _mpesaReceipt.dispose();
+    _paymentReference.dispose();
     super.dispose();
   }
 
@@ -106,22 +128,33 @@ class _SellScreenState extends ConsumerState<SellScreen> {
     try {
       final active = await _store.loadActive();
       _parked = await _store.loadParked();
+      _offlineSales = await OfflineStore().loadSalesQueueForCurrentUser();
       if (active != null) {
-        for (final raw in active['items'] as List? ?? []) {
-          final item = Map<String, dynamic>.from(raw as Map);
-          final id = item['id']?.toString();
-          if (id != null) _cart[id] = item;
+        final checkoutKey = active['checkoutKey']?.toString();
+        if (_offlineSales.any((sale) => sale['id'] == checkoutKey)) {
+          await _store.clearActive();
+        } else {
+          for (final raw in active['items'] as List? ?? []) {
+            final item = Map<String, dynamic>.from(raw as Map);
+            final id = item['id']?.toString();
+            if (id != null) _cart[id] = item;
+          }
+          _method = active['method']?.toString() ?? 'CASH';
+          _customerId = active['customerId']?.toString() ?? _customerId;
+          _discount.text = active['discount']?.toString() ?? '';
+          _discountPercent = active['discountPercent'] == true;
+          _cashReceived.text = active['cashReceived']?.toString() ?? '';
+          _manualMpesa = active['manualMpesa'] == true;
+          _mpesaAmount.text = active['mpesaAmount']?.toString() ?? '';
+          _mpesaReceipt.text = active['mpesaReceipt']?.toString() ?? '';
+          _paymentReference.text = active['paymentReference']?.toString() ?? '';
+          _splitTenders = (active['tenders'] as List? ?? [])
+              .map((row) => Map<String, dynamic>.from(row as Map))
+              .toList();
+          _checkoutKey = active['checkoutKey']?.toString();
+          _checkoutFingerprint = active['checkoutFingerprint']?.toString();
+          _overrideReason = active['overrideReason']?.toString();
         }
-        _method = active['method']?.toString() ?? 'CASH';
-        _customerId = active['customerId']?.toString() ?? _customerId;
-        _discount.text = active['discount']?.toString() ?? '';
-        _cashReceived.text = active['cashReceived']?.toString() ?? '';
-        _manualMpesa = active['manualMpesa'] == true;
-        _mpesaAmount.text = active['mpesaAmount']?.toString() ?? '';
-        _mpesaReceipt.text = active['mpesaReceipt']?.toString() ?? '';
-        _checkoutKey = active['checkoutKey']?.toString();
-        _checkoutFingerprint = active['checkoutFingerprint']?.toString();
-        _overrideReason = active['overrideReason']?.toString();
       }
       if (mounted) setState(() {});
     } catch (_) {
@@ -139,10 +172,13 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       'method': _method,
       'customerId': _customerId,
       'discount': _discount.text,
+      'discountPercent': _discountPercent,
       'cashReceived': _cashReceived.text,
       'manualMpesa': _manualMpesa,
       'mpesaAmount': _mpesaAmount.text,
       'mpesaReceipt': _mpesaReceipt.text,
+      'paymentReference': _paymentReference.text,
+      'tenders': _splitTenders,
       'checkoutKey': _checkoutKey,
       'checkoutFingerprint': _checkoutFingerprint,
       'overrideReason': _overrideReason,
@@ -181,7 +217,9 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       _customers = (responses[2].data as List)
           .map((row) => Map<String, dynamic>.from(row as Map))
           .toList();
-      _role = (responses[3].data as Map)['role']?.toString() ?? '';
+      final user = responses[3].data as Map;
+      _role = user['role']?.toString() ?? '';
+      _cashierName = user['fullName']?.toString() ?? '';
       _loadError = null;
       _hasCachedProducts = false;
       await _store.saveProducts(_products);
@@ -211,6 +249,14 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       } catch (_) {
         _loadError =
             'The saved catalog could not be opened. Reconnect and try again.';
+      }
+      if (_search.text.trim().isNotEmpty) {
+        final term = _search.text.trim().toLowerCase();
+        _products = _products.where((product) {
+          return [product['name'], product['sku'], product['barcode']].any(
+            (value) => value?.toString().toLowerCase().contains(term) == true,
+          );
+        }).toList();
       }
     }
     if (_cashReceived.text.isEmpty && _method == 'CASH' && _cart.isNotEmpty) {
@@ -254,6 +300,11 @@ class _SellScreenState extends ConsumerState<SellScreen> {
   void _message(String value) => ScaffoldMessenger.of(
     context,
   ).showSnackBar(SnackBar(content: Text(value)));
+
+  Future<void> _refreshOfflineSales() async {
+    final queued = await OfflineStore().loadSalesQueueForCurrentUser();
+    if (mounted) setState(() => _offlineSales = queued);
+  }
 
   double _qty(Map<String, dynamic> item) =>
       numberValue(item['_qty']).toDouble();
@@ -500,9 +551,12 @@ class _SellScreenState extends ConsumerState<SellScreen> {
     setState(() {
       _cart.clear();
       _discount.clear();
+      _discountPercent = false;
       _cashReceived.clear();
       _mpesaAmount.clear();
       _mpesaReceipt.clear();
+      _paymentReference.clear();
+      _splitTenders.clear();
       _manualMpesa = false;
       _checkoutKey = null;
       _checkoutFingerprint = null;
@@ -524,10 +578,13 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       'method': _method,
       'customerId': _customerId,
       'discount': _discount.text,
+      'discountPercent': _discountPercent,
       'cashReceived': _cashReceived.text,
       'manualMpesa': _manualMpesa,
       'mpesaAmount': _mpesaAmount.text,
       'mpesaReceipt': _mpesaReceipt.text,
+      'paymentReference': _paymentReference.text,
+      'tenders': _splitTenders,
       'overrideReason': _overrideReason,
     });
     await _store.saveParked(parked);
@@ -537,9 +594,12 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       _method = 'CASH';
       _customerId = null;
       _discount.clear();
+      _discountPercent = false;
       _cashReceived.clear();
       _mpesaAmount.clear();
       _mpesaReceipt.clear();
+      _paymentReference.clear();
+      _splitTenders.clear();
       _manualMpesa = false;
       _overrideReason = null;
       _checkoutKey = null;
@@ -594,10 +654,13 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         'method': _method,
         'customerId': _customerId,
         'discount': _discount.text,
+        'discountPercent': _discountPercent,
         'cashReceived': _cashReceived.text,
         'manualMpesa': _manualMpesa,
         'mpesaAmount': _mpesaAmount.text,
         'mpesaReceipt': _mpesaReceipt.text,
+        'paymentReference': _paymentReference.text,
+        'tenders': _splitTenders,
         'overrideReason': _overrideReason,
       });
     }
@@ -614,10 +677,15 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       _method = selected['method']?.toString() ?? 'CASH';
       _customerId = selected['customerId']?.toString();
       _discount.text = selected['discount']?.toString() ?? '';
+      _discountPercent = selected['discountPercent'] == true;
       _cashReceived.text = selected['cashReceived']?.toString() ?? '';
       _manualMpesa = selected['manualMpesa'] == true;
       _mpesaAmount.text = selected['mpesaAmount']?.toString() ?? '';
       _mpesaReceipt.text = selected['mpesaReceipt']?.toString() ?? '';
+      _paymentReference.text = selected['paymentReference']?.toString() ?? '';
+      _splitTenders = (selected['tenders'] as List? ?? [])
+          .map((row) => Map<String, dynamic>.from(row as Map))
+          .toList();
       _overrideReason = selected['overrideReason']?.toString();
       _parked = remaining;
       _checkoutKey = null;
@@ -683,12 +751,29 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       _message('Add products to the cart first.');
       return;
     }
-    if (_discountValue < 0 || _discountValue > _subtotal) {
-      _message('Discount must be between zero and the subtotal.');
+    if (!_discountInput.isFinite ||
+        _discountInput < 0 ||
+        (_discountPercent
+            ? _discountInput > 100
+            : _discountInput > _subtotal)) {
+      _message(
+        _discountPercent
+            ? 'Discount must be between 0 and 100%.'
+            : 'Discount must be between zero and the subtotal.',
+      );
       return;
     }
     _persist();
-    context.go('/sell/payment');
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (context) => FractionallySizedBox(
+        heightFactor: .94,
+        child: _buildPaymentStep(_connected),
+      ),
+    );
   }
 
   Future<void> _createCustomer() async {
@@ -716,9 +801,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
-              decoration: const InputDecoration(
-                labelText: 'Credit limit (optional)',
-              ),
+              decoration: InputDecoration(labelText: 'Credit limit (optional)'),
             ),
           ],
         ),
@@ -779,23 +862,109 @@ class _SellScreenState extends ConsumerState<SellScreen> {
     }
   }
 
-  Future<void> _checkout() async {
-    if (!_connected) {
-      _message(
-        'You are offline. The cart is saved locally; reconnect and retry to record the sale.',
-      );
+  Future<void> _selectCustomer() async {
+    final search = TextEditingController();
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          final term = search.text.trim().toLowerCase();
+          final customers = _customers.where((customer) {
+            return term.isEmpty ||
+                customer['name']?.toString().toLowerCase().contains(term) ==
+                    true ||
+                customer['phone']?.toString().toLowerCase().contains(term) ==
+                    true;
+          }).toList();
+          return SafeArea(
+            child: SizedBox(
+              height: MediaQuery.sizeOf(context).height * .75,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    child: TextField(
+                      controller: search,
+                      autofocus: true,
+                      onChanged: (_) => setSheetState(() {}),
+                      decoration: const InputDecoration(
+                        hintText: 'Search name or phone',
+                        prefixIcon: Icon(Icons.search),
+                      ),
+                    ),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.person_outline),
+                    title: const Text('Walk-in customer'),
+                    onTap: () => Navigator.pop(context, '__walkin__'),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.person_add_alt_1),
+                    title: const Text('Add customer'),
+                    onTap: () => Navigator.pop(context, '__add__'),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: customers.length,
+                      itemBuilder: (context, index) {
+                        final customer = customers[index];
+                        return ListTile(
+                          title: Text(
+                            customer['name']?.toString() ?? 'Customer',
+                          ),
+                          subtitle: Text(
+                            '${customer['phone'] ?? 'No phone'} · Due ${kes(numberValue(customer['balance']))}',
+                          ),
+                          onTap: () => Navigator.pop(
+                            context,
+                            customer['id']?.toString(),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    search.dispose();
+    if (selected == null || !mounted) return;
+    if (selected == '__add__') {
+      await _createCustomer();
       return;
     }
+    setState(() => _customerId = selected == '__walkin__' ? null : selected);
+    await _persist();
+  }
+
+  Future<void> _checkout() async {
+    final connected = _connected;
     if (_cart.isEmpty) {
       _message('The cart is empty.');
       return;
     }
-    if (_discountValue < 0 || _discountValue > _subtotal) {
+    if (!_discountInput.isFinite ||
+        _discountInput < 0 ||
+        (_discountPercent
+            ? _discountInput > 100
+            : _discountInput > _subtotal)) {
       _message('Discount must be between zero and the subtotal.');
       return;
     }
     if (_method == 'CREDIT' && _customerId == null) {
       _message('Select or add a customer for a credit sale.');
+      return;
+    }
+    if (!connected && _method != 'CASH') {
+      _message(
+        'Only cash sales can be saved offline. Reconnect for other payments.',
+      );
       return;
     }
     final customer = _customers
@@ -806,8 +975,17 @@ class _SellScreenState extends ConsumerState<SellScreen> {
       'CASH' => min(_cashValue, _total).toDouble(),
       'MPESA' when _manualMpesa =>
         double.tryParse(_mpesaAmount.text.trim()) ?? 0.0,
+      'SPLIT' => _splitPaid,
       _ => _total,
     };
+    if (!paid.isFinite || paid < 0) {
+      _message('Enter a valid payment amount.');
+      return;
+    }
+    if (!connected && (_method != 'CASH' || paid < _total)) {
+      _message('Offline sales must be paid in full with cash.');
+      return;
+    }
     if (_method == 'MPESA' && _manualMpesa) {
       final receipt = _mpesaReceipt.text.trim();
       if (!RegExp(r'^[A-Za-z0-9]{6,32}$').hasMatch(receipt)) {
@@ -820,6 +998,41 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         _message(
           'Enter an M-Pesa amount greater than zero and no more than the sale total.',
         );
+        return;
+      }
+    }
+    if (_method == 'SPLIT') {
+      final methods = _splitTenders
+          .map((tender) => tender['method']?.toString())
+          .toSet();
+      if (_splitTenders.length < 2 || methods.length < 2) {
+        _message('Choose at least two different payment methods.');
+        return;
+      }
+      for (final tender in _splitTenders) {
+        final method = tender['method']?.toString();
+        final amount = double.tryParse(tender['amount']?.toString() ?? '');
+        if (amount == null || !amount.isFinite || amount <= 0) {
+          _message('Enter an amount above zero for every payment method.');
+          return;
+        }
+        if (method == 'MPESA' &&
+            !RegExp(
+              r'^[A-Za-z0-9]{6,32}$',
+            ).hasMatch(tender['mpesaReceiptNumber']?.toString() ?? '')) {
+          _message('Enter a valid M-Pesa confirmation code for the payment.');
+          return;
+        }
+        if ((method == 'BANK' || method == 'CARD') &&
+            (tender['reference']?.toString().trim().isEmpty ?? true)) {
+          _message(
+            'Enter a reference for the ${method!.toLowerCase()} payment.',
+          );
+          return;
+        }
+      }
+      if (_splitPaid > _total) {
+        _message('Split payment amounts cannot exceed the sale total.');
         return;
       }
     }
@@ -849,6 +1062,13 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         return;
       }
     }
+    if ((_method == 'BANK' || _method == 'CARD') &&
+        _paymentReference.text.trim().isEmpty) {
+      _message(
+        'Enter the ${_method == 'BANK' ? 'bank transfer' : 'card'} reference.',
+      );
+      return;
+    }
     if (_cart.values.any((item) => _qty(item) > _available(item)) &&
         (!_canOverride || _overrideReason != 'NEGATIVE_STOCK_OVERRIDE')) {
       _message(
@@ -872,10 +1092,29 @@ class _SellScreenState extends ConsumerState<SellScreen> {
             },
           )
           .toList(),
-      'method': _method,
+      'method': _method == 'SPLIT' ? 'CASH' : _method,
       'amountPaid': paid,
+      if (_method == 'SPLIT')
+        'tenders': _splitTenders
+            .map(
+              (tender) => {
+                'method': tender['method'],
+                'amount': double.parse(tender['amount'].toString()),
+                if (tender['method'] == 'MPESA')
+                  'mpesaReceiptNumber': tender['mpesaReceiptNumber']
+                      .toString()
+                      .trim()
+                      .toUpperCase(),
+                if (tender['method'] == 'BANK' || tender['method'] == 'CARD')
+                  'reference': tender['reference'].toString().trim(),
+              },
+            )
+            .toList(),
       if (_method == 'MPESA' && _manualMpesa)
         'mpesaReceiptNumber': _mpesaReceipt.text.trim().toUpperCase(),
+      if ((_method == 'BANK' || _method == 'CARD') &&
+          _paymentReference.text.trim().isNotEmpty)
+        'paymentReference': _paymentReference.text.trim(),
       if (_customerId != null) 'customerId': _customerId,
       if (_discountValue > 0)
         'discount': double.parse(_discountValue.toStringAsFixed(2)),
@@ -892,6 +1131,10 @@ class _SellScreenState extends ConsumerState<SellScreen> {
     }
     setState(() => _saving = true);
     try {
+      if (!connected) {
+        await _saveOfflineCashSale(request);
+        return;
+      }
       final response = await dio.post(
         '/sales',
         data: request,
@@ -912,15 +1155,176 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         extra: {'method': _method, 'cashReceived': _cashValue},
       );
     } catch (error) {
-      _message(apiError(error));
+      if (error is DioException &&
+          error.response == null &&
+          _method == 'CASH' &&
+          _cashValue >= _total) {
+        try {
+          await _saveOfflineCashSale(request);
+        } catch (storageError) {
+          _message('Sale was not saved offline: ${apiError(storageError)}');
+        }
+      } else {
+        _message(apiError(error));
+      }
       // The request key and cart stay saved so a manual retry cannot duplicate a sale.
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
+  Future<void> _saveOfflineCashSale(Map<String, dynamic> request) async {
+    final cashReceived = _cashValue;
+    final changeDue = _change;
+    final saleTotal = _total;
+    final identity = await OfflineStore().loadIdentity();
+    if (identity == null ||
+        identity['id'] == null ||
+        identity['businessId'] == null) {
+      throw StateError(
+        'Reconnect once to prepare this device before recording offline sales.',
+      );
+    }
+    final operationId = _checkoutKey;
+    if (operationId == null) {
+      throw StateError(
+        'Sale reference is missing. Keep the cart and try again.',
+      );
+    }
+    await OfflineStore().enqueueOfflineSale({
+      'id': operationId,
+      'request': request,
+      'userId': identity['id'],
+      'businessId': identity['businessId'],
+      'status': 'pending',
+      'createdAt': DateTime.now().toIso8601String(),
+      'total': saleTotal,
+      'cashReceived': cashReceived,
+      'change': changeDue,
+      'items': _cart.values
+          .map(
+            (item) => {
+              'name': item['name'],
+              'quantity': _qty(item),
+              'unit': item['_saleUnit'] ?? item['unit'],
+              'unitPrice': item['sellingPrice'],
+            },
+          )
+          .toList(),
+    });
+    try {
+      await _applyOfflineStock();
+    } catch (error) {
+      if (mounted) {
+        _message(
+          'Sale saved; cached stock could not be updated: ${apiError(error)}',
+        );
+      }
+    }
+    try {
+      await _store.clearActive();
+    } catch (error) {
+      if (mounted) {
+        _message('Sale saved. The cart will be cleared when you reopen Sell.');
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _offlineSales = [
+          ..._offlineSales,
+          {
+            'id': operationId,
+            'status': 'pending',
+            'total': _total,
+            'createdAt': DateTime.now().toIso8601String(),
+          },
+        ];
+        _cart.clear();
+        _discount.clear();
+        _discountPercent = false;
+        _cashReceived.clear();
+        _mpesaAmount.clear();
+        _mpesaReceipt.clear();
+        _paymentReference.clear();
+        _manualMpesa = false;
+        _splitTenders.clear();
+        _customerId = null;
+        _checkoutKey = null;
+        _checkoutFingerprint = null;
+        _overrideReason = null;
+      });
+    }
+    await _persist();
+    await HapticFeedback.mediumImpact();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.cloud_upload_outlined, color: C.warn),
+            SizedBox(width: 10),
+            Expanded(child: Text('Sale saved on this device')),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Local receipt · ${operationId.substring(0, 8).toUpperCase()}',
+            ),
+            const SizedBox(height: 8),
+            Text('Total ${kes(saleTotal)}'),
+            Text(
+              'Cash received ${kes(cashReceived)} · Change ${kes(changeDue)}',
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Not synced yet. Keep this screen open or reconnect; StockPesa will send the sale once the connection returns.',
+            ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Ready for next sale'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _applyOfflineStock() async {
+    final updated = _products.map((product) {
+      final item = _cart[product['id']?.toString()];
+      if (item == null || item['variantId'] != null) return product;
+      final factor = numberValue(item['_unitFactor']).toDouble();
+      return {
+        ...product,
+        'quantity':
+            numberValue(product['quantity']) -
+            _qty(item) * (factor == 0 ? 1 : factor),
+      };
+    }).toList();
+    _products = updated;
+    await _store.saveProducts(updated);
+    await _store.saveCatalog(updated, _categories);
+  }
+
   @override
   Widget build(BuildContext context) {
+    ref.listen(connectivityProvider, (_, next) {
+      final connected = next.asData?.value.any(
+        (value) => value != ConnectivityResult.none,
+      );
+      if (connected == true) {
+        unawaited(() async {
+          await ref.read(offlineSalesSyncProvider).syncPending();
+          await _refreshOfflineSales();
+        }());
+      }
+    });
     final connected = ref
         .watch(connectivityProvider)
         .maybeWhen(
@@ -938,19 +1342,27 @@ class _SellScreenState extends ConsumerState<SellScreen> {
   Widget _buildSaleStep(bool connected) => Column(
     children: [
       Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
         child: Row(
           children: [
-            const Icon(Icons.looks_one_outlined, color: C.emerald),
-            const SizedBox(width: 8),
             Expanded(
-              child: Text(
-                'Step 1 of 2 · Choose products',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Sell',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  Text(
+                    '${_cashierName.isEmpty ? 'Attendant' : _cashierName} · ${businessDate(DateTime.now())} ${TimeOfDay.now().format(context)}',
+                    style: TextStyle(color: mutedOn(context), fontSize: 12),
+                  ),
+                ],
               ),
             ),
+            _connectionBadge(connected),
           ],
         ),
       ),
@@ -1010,6 +1422,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
             style: TextStyle(fontSize: 12),
           ),
         ),
+      if (_offlineSales.isNotEmpty) _offlineSalesBanner(connected),
       if (_categories.isNotEmpty)
         SizedBox(
           height: 46,
@@ -1076,6 +1489,10 @@ class _SellScreenState extends ConsumerState<SellScreen> {
                   itemBuilder: (context, index) {
                     final product = _products[index];
                     final quantity = _available(product);
+                    final minimum = numberValue(product['minStock']);
+                    final outOfStock = quantity <= 0;
+                    final lowStock =
+                        !outOfStock && minimum > 0 && quantity <= minimum;
                     final cartQty = _cart[product['id']] == null
                         ? 0
                         : _qty(_cart[product['id']]!);
@@ -1086,11 +1503,27 @@ class _SellScreenState extends ConsumerState<SellScreen> {
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                         subtitle: Text(
-                          '${kes(numberValue(product['sellingPrice']))}  ·  $quantity ${product['unit'] ?? 'units'} available',
+                          '${kes(numberValue(product['sellingPrice']))}  ·  $quantity ${product['unit'] ?? 'units'}${outOfStock
+                              ? ' · Out of stock'
+                              : lowStock
+                              ? ' · Low stock'
+                              : ' available'}',
+                          style: TextStyle(
+                            color: outOfStock
+                                ? C.danger
+                                : lowStock
+                                ? C.warn
+                                : null,
+                            fontWeight: outOfStock || lowStock
+                                ? FontWeight.w700
+                                : null,
+                          ),
                         ),
                         trailing: IconButton(
                           tooltip: 'Add to sale',
-                          onPressed: () => _add(product),
+                          onPressed: outOfStock && !_canOverride
+                              ? null
+                              : () => _add(product),
                           icon: Icon(
                             cartQty > 0
                                 ? Icons.add_circle
@@ -1126,9 +1559,9 @@ class _SellScreenState extends ConsumerState<SellScreen> {
               const Spacer(),
               FilledButton.icon(
                 onPressed: _cart.isEmpty ? null : _continueToPayment,
-                icon: const Icon(Icons.arrow_forward),
+                icon: const Icon(Icons.point_of_sale),
                 label: Text(
-                  'Review sale · ${kes(_total)}',
+                  'Complete Sale · ${kes(_total)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -1171,7 +1604,6 @@ class _SellScreenState extends ConsumerState<SellScreen> {
                   ),
                 ),
                 IconButton(
-                  visualDensity: VisualDensity.compact,
                   tooltip: 'Remove one',
                   onPressed: () =>
                       _setQuantity(entry.value, _qty(entry.value) - 1),
@@ -1188,17 +1620,47 @@ class _SellScreenState extends ConsumerState<SellScreen> {
                   ),
                 ),
                 IconButton(
-                  visualDensity: VisualDensity.compact,
                   tooltip: 'Add one',
                   onPressed: () =>
                       _setQuantity(entry.value, _qty(entry.value) + 1),
                   icon: const Icon(Icons.add_circle_outline),
+                ),
+                SizedBox(
+                  width: 82,
+                  child: Text(
+                    kes(
+                      _qty(entry.value) *
+                          numberValue(entry.value['sellingPrice']),
+                    ),
+                    textAlign: TextAlign.end,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Remove item',
+                  onPressed: () => _setQuantity(entry.value, 0),
+                  icon: const Icon(Icons.close),
                 ),
               ],
             ),
           Row(
             children: [
               const Expanded(child: Text('Discount')),
+              SegmentedButton<bool>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(value: false, label: Text('KES')),
+                  ButtonSegment(value: true, label: Text('%')),
+                ],
+                selected: {_discountPercent},
+                onSelectionChanged: (value) {
+                  setState(() {
+                    _discountPercent = value.first;
+                  });
+                  _persist();
+                },
+              ),
+              const SizedBox(width: 8),
               SizedBox(
                 width: 140,
                 child: TextField(
@@ -1207,8 +1669,9 @@ class _SellScreenState extends ConsumerState<SellScreen> {
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
-                  decoration: const InputDecoration(
-                    prefixText: 'KES ',
+                  decoration: InputDecoration(
+                    prefixText: _discountPercent ? null : 'KES ',
+                    suffixText: _discountPercent ? '%' : null,
                     isDense: true,
                   ),
                   onChanged: (_) {
@@ -1247,6 +1710,183 @@ class _SellScreenState extends ConsumerState<SellScreen> {
     ),
   );
 
+  Widget _connectionBadge(bool connected) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+    decoration: BoxDecoration(
+      color: connected
+          ? C.ok.withValues(alpha: .10)
+          : C.warn.withValues(alpha: .15),
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          connected ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
+          size: 16,
+          color: connected ? C.ok : C.warn,
+        ),
+        const SizedBox(width: 5),
+        Text(
+          connected ? 'Online' : 'Offline',
+          style: TextStyle(
+            color: connected ? C.ok : C.warn,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _offlineSalesBanner(bool connected) {
+    final failed = _offlineSales.where((sale) => sale['status'] == 'failed');
+    final failedCount = failed.length;
+    final firstFailure = failedCount == 0 ? null : failed.first;
+    final status = failedCount > 0
+        ? '$failedCount sale${failedCount == 1 ? '' : 's'} need review · ${firstFailure?['lastError'] ?? 'Check stock and retry'}'
+        : '${_offlineSales.length} offline sale${_offlineSales.length == 1 ? '' : 's'} waiting to sync';
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 4, 14, 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF0CC),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_upload_outlined, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              status,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+          ),
+          if (connected)
+            IconButton(
+              tooltip: failedCount > 0 ? 'Retry failed sales' : 'Sync sales',
+              onPressed: () async {
+                if (failedCount > 0) {
+                  await ref.read(offlineSalesSyncProvider).retryFailed();
+                } else {
+                  await ref.read(offlineSalesSyncProvider).syncPending();
+                }
+                await _refreshOfflineSales();
+              },
+              icon: const Icon(Icons.sync),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _splitTenderEditor(int index) {
+    final tender = _splitTenders[index];
+    final tenderId = tender['id']?.toString() ?? 'legacy-$index';
+    final method = tender['method']?.toString() ?? 'CASH';
+    const methods = [
+      ('CASH', 'Cash'),
+      ('MPESA', 'M-Pesa'),
+      ('BANK', 'Bank transfer'),
+      ('CARD', 'Card'),
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  key: ValueKey('split-$tenderId-$method'),
+                  initialValue: method,
+                  decoration: InputDecoration(
+                    labelText: 'Payment ${index + 1}',
+                  ),
+                  items: [
+                    for (final option in methods)
+                      DropdownMenuItem(
+                        value: option.$1,
+                        child: Text(option.$2),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() {
+                      _splitTenders[index] = {
+                        ...tender,
+                        'id': tenderId,
+                        'method': value,
+                      };
+                    });
+                    _persist();
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextFormField(
+                  key: ValueKey('split-$tenderId-amount'),
+                  initialValue: tender['amount']?.toString() ?? '',
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(labelText: 'Amount (KES)'),
+                  onChanged: (value) {
+                    _splitTenders[index]['amount'] = value;
+                    setState(() {});
+                    _persist();
+                  },
+                ),
+              ),
+              IconButton(
+                tooltip: 'Remove payment',
+                onPressed: () {
+                  setState(() => _splitTenders.removeAt(index));
+                  _persist();
+                },
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
+          if (method == 'MPESA')
+            TextFormField(
+              key: ValueKey('split-$tenderId-mpesa'),
+              initialValue: tender['mpesaReceiptNumber']?.toString() ?? '',
+              textCapitalization: TextCapitalization.characters,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
+              ],
+              decoration: const InputDecoration(
+                labelText: 'M-Pesa confirmation code',
+              ),
+              onChanged: (value) {
+                _splitTenders[index]['mpesaReceiptNumber'] = value;
+                _persist();
+              },
+            ),
+          if (method == 'BANK' || method == 'CARD')
+            TextFormField(
+              key: ValueKey('split-$tenderId-reference'),
+              initialValue: tender['reference']?.toString() ?? '',
+              textCapitalization: TextCapitalization.characters,
+              decoration: InputDecoration(
+                labelText:
+                    '${method == 'BANK' ? 'Bank transfer' : 'Card'} reference',
+              ),
+              onChanged: (value) {
+                _splitTenders[index]['reference'] = value;
+                _persist();
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPaymentStep(bool connected) {
     final customer = _customers
         .where((row) => row['id'] == _customerId)
@@ -1255,14 +1895,23 @@ class _SellScreenState extends ConsumerState<SellScreen> {
     final limit = customer?['creditLimit'] == null
         ? null
         : numberValue(customer!['creditLimit']);
-    final shortBy = max(0, _total - _cashValue).toDouble();
+    final shortBy = switch (_method) {
+      'CASH' => max(0, _total - _cashValue).toDouble(),
+      'CREDIT' => _total,
+      'SPLIT' => max(0, _total - _splitPaid).toDouble(),
+      'MPESA' when _manualMpesa => max(
+        0,
+        _total - (double.tryParse(_mpesaAmount.text) ?? 0),
+      ).toDouble(),
+      _ => 0.0,
+    };
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
       children: [
         Row(
           children: [
             IconButton(
-              onPressed: () => context.go('/sell'),
+              onPressed: () => Navigator.of(context).maybePop(),
               icon: const Icon(Icons.arrow_back),
             ),
             Text(
@@ -1328,6 +1977,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
                     ('BANK', 'Bank transfer'),
                     ('CARD', 'Card'),
                     ('CREDIT', 'Credit'),
+                    ('SPLIT', 'Split payment'),
                   ]
                   .map(
                     (value) => DropdownMenuItem(
@@ -1337,6 +1987,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
                   )
                   .toList(),
           onChanged: (value) {
+            if (!connected) return;
             setState(() {
               _method = value ?? 'CASH';
               if (_method == 'CASH' && _cashReceived.text.isEmpty) {
@@ -1345,11 +1996,54 @@ class _SellScreenState extends ConsumerState<SellScreen> {
               if (_method == 'MPESA' && _mpesaAmount.text.isEmpty) {
                 _mpesaAmount.text = _total.toStringAsFixed(2);
               }
+              if (_method == 'SPLIT' && _splitTenders.isEmpty) {
+                _splitTenders = [_newTender('CASH'), _newTender('MPESA')];
+              }
             });
             _persist();
           },
         ),
         const SizedBox(height: 12),
+        if (_method == 'SPLIT') ...[
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Split payment',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const Text(
+                    'Enter each confirmed payment. M-Pesa needs its confirmation code.',
+                  ),
+                  for (var index = 0; index < _splitTenders.length; index++)
+                    _splitTenderEditor(index),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () {
+                        setState(() => _splitTenders.add(_newTender('CASH')));
+                        _persist();
+                      },
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add payment method'),
+                    ),
+                  ),
+                  _moneyRow('Amount received', _splitPaid, bold: true),
+                  _moneyRow(shortBy > 0 ? 'Balance due' : 'Remaining', shortBy),
+                  if (_splitPaid > _total)
+                    const Text(
+                      'Payment amounts exceed the sale total.',
+                      style: TextStyle(color: C.danger),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         if (_method == 'CASH') ...[
           TextField(
             controller: _cashReceived,
@@ -1362,6 +2056,21 @@ class _SellScreenState extends ConsumerState<SellScreen> {
               setState(() {});
               _persist();
             },
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final amount in [_total, 500.0, 1000.0])
+                ActionChip(
+                  label: Text(amount == _total ? 'Exact' : kes(amount)),
+                  onPressed: () {
+                    _cashReceived.text = amount.toStringAsFixed(2);
+                    setState(() {});
+                    _persist();
+                  },
+                ),
+            ],
           ),
           const SizedBox(height: 8),
           _moneyRow(
@@ -1439,45 +2148,28 @@ class _SellScreenState extends ConsumerState<SellScreen> {
             ),
         ],
         if (_method == 'BANK' || _method == 'CARD')
-          const Card(
-            child: ListTile(
-              leading: Icon(Icons.info_outline),
-              title: Text('Reference not stored'),
-              subtitle: Text(
-                'The current sale API records the payment method but has no bank/card reference field.',
-              ),
+          TextField(
+            controller: _paymentReference,
+            textCapitalization: TextCapitalization.characters,
+            decoration: InputDecoration(
+              labelText:
+                  '${_method == 'BANK' ? 'Bank transfer' : 'Card'} reference',
+              prefixIcon: const Icon(Icons.receipt_long_outlined),
             ),
+            onChanged: (_) => _persist(),
           ),
-        if (_method == 'CREDIT' || shortBy > 0 || _method == 'MPESA') ...[
+        if (_method == 'CREDIT' ||
+            shortBy > 0 ||
+            _method == 'MPESA' ||
+            _method == 'SPLIT') ...[
           const SizedBox(height: 12),
-          DropdownButtonFormField<String?>(
-            initialValue: _customerId,
-            decoration: const InputDecoration(labelText: 'Customer account'),
-            items: [
-              const DropdownMenuItem<String?>(
-                value: null,
-                child: Text('Select customer'),
-              ),
-              for (final row in _customers)
-                DropdownMenuItem<String?>(
-                  value: row['id']?.toString(),
-                  child: Text(
-                    '${row['name']} · due ${kes(numberValue(row['balance']))}',
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-            ],
-            onChanged: (value) {
-              setState(() => _customerId = value);
-              _persist();
-            },
-          ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: _createCustomer,
-              icon: const Icon(Icons.person_add_alt_1),
-              label: const Text('Add customer'),
+          OutlinedButton.icon(
+            onPressed: connected ? _selectCustomer : null,
+            icon: const Icon(Icons.person_search_outlined),
+            label: Text(
+              customer == null
+                  ? 'Select customer for the balance'
+                  : '${customer['name']} · due ${kes(balance)}',
             ),
           ),
           if (customer != null)
@@ -1491,14 +2183,26 @@ class _SellScreenState extends ConsumerState<SellScreen> {
             ),
         ],
         if (!connected)
-          const Card(
+          Card(
             color: Color(0xFFFFF0CC),
             child: ListTile(
-              leading: Icon(Icons.cloud_off_outlined),
-              title: Text('Offline: sale cannot be submitted'),
-              subtitle: Text(
-                'Your cart is saved here. Reconnect and retry; no sale has been queued.',
+              leading: const Icon(Icons.cloud_off_outlined),
+              title: const Text('Offline cash sale'),
+              subtitle: const Text(
+                'Cash paid in full can be saved on this device and synced when you reconnect. Other payment methods need a connection.',
               ),
+              trailing: _method == 'CASH'
+                  ? null
+                  : TextButton(
+                      onPressed: () {
+                        setState(() {
+                          _method = 'CASH';
+                          _cashReceived.text = _total.toStringAsFixed(2);
+                        });
+                        _persist();
+                      },
+                      child: const Text('Use cash'),
+                    ),
             ),
           ),
         if (_hasCachedProducts)
@@ -1510,7 +2214,9 @@ class _SellScreenState extends ConsumerState<SellScreen> {
           ),
         const SizedBox(height: 16),
         FilledButton.icon(
-          onPressed: _saving || !connected ? null : _checkout,
+          onPressed: _saving || (!connected && _method != 'CASH')
+              ? null
+              : _checkout,
           icon: _saving
               ? const SizedBox(
                   width: 18,
@@ -1522,7 +2228,11 @@ class _SellScreenState extends ConsumerState<SellScreen> {
                 )
               : const Icon(Icons.check_circle_outline),
           label: Text(
-            _saving ? 'Recording sale…' : 'Complete sale · ${kes(_total)}',
+            _saving
+                ? 'Saving sale…'
+                : connected
+                ? 'Complete Sale · ${kes(_total)}'
+                : 'Save cash sale offline · ${kes(_total)}',
           ),
         ),
         if (_loadError != null)

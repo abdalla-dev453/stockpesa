@@ -1,9 +1,11 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api.dart';
 import '../../../core/storage/cart_store.dart';
+import '../../../core/storage/offline_store.dart';
 import '../../../core/notifications/push_notifications.dart';
 import '../../dashboard/data/dashboard_repository.dart';
 
@@ -30,6 +32,7 @@ class SessionController extends Notifier<SessionState> {
   SessionState build() {
     final subscription = sessionExpiredStream.listen((_) {
       CartStore().clearAll();
+      unawaited(OfflineStore().clearSnapshotsAndIdentity());
       ref.read(dashboardRepositoryProvider).clearCache();
       if (state.status != SessionStatus.signedOut) {
         state = state.copyWith(status: SessionStatus.signedOut);
@@ -51,6 +54,12 @@ class SessionController extends Notifier<SessionState> {
         await currentUser();
         signedIn = true;
         unawaited(StockPesaPushNotifications.instance.registerIfAlreadyAllowed());
+      } on DioException catch (error) {
+        if (error.response?.statusCode == 401) {
+          await logout();
+        } else {
+          signedIn = true;
+        }
       } catch (_) {
         await logout();
       }

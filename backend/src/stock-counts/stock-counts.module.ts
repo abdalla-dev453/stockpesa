@@ -1,11 +1,14 @@
-import { BadRequestException, Controller, Get, Post, Patch, Param, ParseUUIDPipe, Body, UseGuards, Module, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Controller, Get, Post, Patch, Param, ParseUUIDPipe, Body, UseGuards, Module, NotFoundException } from "@nestjs/common";
 import { Type } from "class-transformer";
 import { IsNumber, IsOptional, IsString, IsUUID, Min } from "class-validator";
 import { PrismaService } from "../prisma.service";
 import { AuthGuard, Me, Roles } from "../common/auth";
 import { StockModule, StockService } from "../stock/stock.module";
 
-class CountCreateDto { @IsOptional() @IsString() notes?: string }
+class CountCreateDto {
+  @IsOptional() @IsString() notes?: string;
+  @IsOptional() @IsUUID() clientId?: string;
+}
 class CountItemDto {
   @IsUUID() productId: string;
   @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 3 }) @Min(0) countedQuantity?: number;
@@ -14,15 +17,29 @@ class CountItemDto {
 @Controller("stock-counts") @UseGuards(AuthGuard)
 class StockCountsController {
   constructor(private db: PrismaService, private stock: StockService) {}
-  @Post() @Roles("OWNER", "MANAGER") async create(@Me() u, @Body() _d: CountCreateDto) {
-    const products = await this.db.product.findMany({
-      where: { businessId: u.businessId, deletedAt: null, active: true },
-      include: { stock: true }, orderBy: { name: "asc" },
-    });
-    if (!products.length) throw new BadRequestException("There are no active products to count");
+  @Post() @Roles("OWNER", "MANAGER") async create(@Me() u, @Body() d: CountCreateDto) {
     return this.db.$transaction(async (tx) => {
+      if (d.clientId) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${u.businessId + ":stock-count-create:" + d.clientId}))`;
+        const existing = await tx.stockCount.findFirst({
+          where: { id: d.clientId, businessId: u.businessId },
+          include: { items: { include: { product: true } } },
+        });
+        if (existing) {
+          if (existing.userId !== u.sub || existing.notes !== d.notes) {
+            throw new ConflictException("Stock count ID was already used for a different request");
+          }
+          return existing;
+        }
+      }
+      const products = await tx.product.findMany({
+        where: { businessId: u.businessId, deletedAt: null, active: true },
+        include: { stock: true }, orderBy: { name: "asc" },
+      });
+      if (!products.length) throw new BadRequestException("There are no active products to count");
       const count = await tx.stockCount.create({ data: {
-        businessId: u.businessId, userId: u.sub, notes: _d?.notes,
+        ...(d.clientId ? { id: d.clientId } : {}),
+        businessId: u.businessId, userId: u.sub, notes: d.notes,
         items: { create: products.map((p) => ({ productId: p.id, systemQty: p.stock?.quantity ?? 0 })) },
       }, include: { items: { include: { product: true } } } });
       await tx.auditLog.create({ data: { businessId: u.businessId, userId: u.sub, action: "stock_count.started", entity: "stock_count", entityId: count.id, meta: { itemCount: products.length } } });
